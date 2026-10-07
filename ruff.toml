@@ -1,0 +1,3 @@
+[lint]
+# Local time is intended for recording filenames; subprocess results are checked by hand.
+ignore = ["DTZ005", "PLW1510"]

@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      - run: pip install ruff==0.16.10 -r requirements.txt
+      - run: ruff check
+      - run: shellcheck asr
+      - run: python -c "import faster_whisper, numpy, sounddevice, evdev"
