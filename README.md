@@ -38,7 +38,7 @@ desktops should work but are untested; see [Other desktops](#other-desktops).
 | **F5** (tap) | Start recording. Tap again to stop, transcribe and paste. |
 | **F5** (hold) | Push-to-talk: speak while holding, release to transcribe and paste. |
 | **F3** | Same as F5, but the transcript is cleaned up by a local LLM before pasting. |
-| **F4** | Save the last take (audio + transcript) to `recordings/`, only if the text matches what you said. |
+| **F4** | Save the last take (audio + transcript) to `recordings/`. Fix the transcript first if it's wrong. |
 
 The keys are only suggestions; you choose them when you set up the shortcuts.
 
@@ -146,8 +146,10 @@ recordings/
 This is the Hugging Face `audiofolder` layout, ready for fine-tuning a speech model.
 
 > [!IMPORTANT]
-> Only press F4 when the transcript matches exactly what you said. A wrong transcript
-> teaches a fine-tuned model the wrong words.
+> The saved transcript must match exactly what you said, or a fine-tuned model learns the
+> wrong words. If Whisper got it right, save it as is. If it got it wrong, save it and fix
+> the line in `metadata.csv`: these corrected takes are the most valuable for fine-tuning,
+> especially for accented speech.
 
 - Only the **latest** take can be saved, and only once. Pressing F4 again shows "Nothing to
   save" until you dictate again.
