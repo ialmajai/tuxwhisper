@@ -38,7 +38,7 @@ desktops should work but are untested; see [Other desktops](#other-desktops).
 | **F5** (tap) | Start recording. Tap again to stop, transcribe and paste. |
 | **F5** (hold) | Push-to-talk: speak while holding, release to transcribe and paste. |
 | **F3** | Same as F5, but the transcript is cleaned up by a local LLM before pasting. |
-| **F4** | Save the last take (audio + transcript) to `recordings/`. |
+| **F4** | Save the last take (audio + transcript) to `recordings/`, only if the text matches what you said. |
 
 The keys are only suggestions; you choose them when you set up the shortcuts.
 
@@ -144,6 +144,10 @@ recordings/
 ```
 
 This is the Hugging Face `audiofolder` layout, ready for fine-tuning a speech model.
+
+> [!IMPORTANT]
+> Only press F4 when the transcript matches exactly what you said. A wrong transcript
+> teaches a fine-tuned model the wrong words.
 
 - Only the **latest** take can be saved, and only once. Pressing F4 again shows "Nothing to
   save" until you dictate again.
