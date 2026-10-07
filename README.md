@@ -142,7 +142,8 @@ recordings/
 └── metadata.csv           # file_name,transcription
 ```
 
-This is the Hugging Face `audiofolder` layout, so the folder loads directly:
+This is the Hugging Face `audiofolder` layout, so the folder loads directly. Decoding the
+audio needs the `audio` extra (`pip install "datasets[audio]"`, which pulls in PyTorch):
 
 ```python
 from datasets import load_dataset
