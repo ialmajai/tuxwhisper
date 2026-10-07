@@ -27,6 +27,9 @@ DEVICE = os.environ.get("ASR_DEVICE", "cuda")  # "cuda" or "cpu"
 GPU_MODEL = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
 CPU_MODEL = "small"  # large models are too slow for live dictation on most CPUs
 LANGUAGE = os.environ.get("ASR_LANGUAGE") or None  # e.g. "en"; None = auto-detect
+# Whisper imitates the style of its prompt. large-v3-turbo often drops capitals and
+# punctuation on casual speech; a punctuated prompt brings them back. Set to "" to disable.
+PROMPT = os.environ.get("ASR_PROMPT", "Hello. This is a sentence, with punctuation and capitals.") or None
 REWRITE_MODEL = os.environ.get("ASR_REWRITE_MODEL", "llama3.2")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 # Shift+Insert pastes in browsers, editors and terminals alike, and unlike Ctrl+V it doesn't
@@ -186,7 +189,7 @@ class Dictation:
             return
         t0 = time.time()
         segments, _ = self.model.transcribe(audio, language=LANGUAGE, beam_size=1,
-                                            vad_filter=True)
+                                            vad_filter=True, initial_prompt=PROMPT)
         text = " ".join(s.text.strip() for s in segments).strip()
         print(f"[{len(audio) / RATE:.1f}s audio (-{excess / RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
               flush=True)
