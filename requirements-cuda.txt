@@ -1,0 +1,4 @@
+# For NVIDIA GPUs (the default ASR_DEVICE=cuda): CUDA libraries used by faster-whisper.
+-r requirements.txt
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Wrapper: puts pip-installed cuDNN/cuBLAS (if any) on the library path, then runs asr.py.
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+for SITE in "$DIR"/.venv/lib/python3*/site-packages/nvidia; do
+    [ -d "$SITE" ] && export LD_LIBRARY_PATH="$SITE/cudnn/lib:$SITE/cublas/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+done
+exec "$DIR/.venv/bin/python" "$DIR/asr.py" "$@"

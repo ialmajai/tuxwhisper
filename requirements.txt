@@ -1,0 +1,4 @@
+faster-whisper>=1.2,<2
+numpy>=1.24
+sounddevice>=0.5
+evdev>=1.6
