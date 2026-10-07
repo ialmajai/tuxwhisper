@@ -21,8 +21,8 @@ nothing is sent to the cloud.
 - **Optional LLM cleanup.** A second key passes the transcript through a local
   [Ollama](https://ollama.com) model to fix punctuation and remove "um"s, without answering
   the questions you dictate.
-- **Builds a voice dataset.** One key saves the last recording with its transcript, in a
-  format that loads straight into Hugging Face `datasets`.
+- **Builds a voice dataset.** One key saves the last recording with its transcript, ready
+  for fine-tuning.
 - **Leaves your clipboard alone.** Whatever you had copied is restored after each paste.
 - **Works on any keyboard layout.** It pastes with Shift+Insert, which doesn't depend on
   QWERTY.
@@ -142,13 +142,7 @@ recordings/
 └── metadata.csv           # file_name,transcription
 ```
 
-This is the Hugging Face `audiofolder` layout, so the folder loads directly. Decoding the
-audio needs the `audio` extra (`pip install "datasets[audio]"`, which pulls in PyTorch):
-
-```python
-from datasets import load_dataset
-ds = load_dataset("audiofolder", data_dir="recordings")
-```
+This is the Hugging Face `audiofolder` layout, ready for fine-tuning a speech model.
 
 - Only the **latest** take can be saved, and only once. Pressing F4 again shows "Nothing to
   save" until you dictate again.
