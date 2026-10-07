@@ -41,13 +41,32 @@ RECORDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recording
 VOCAB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab.txt")
 
 
-def notify(msg):
+def notify(msg, persistent=False):
+    """Show a desktop notification. persistent=True keeps it on screen until
+    close_notification() is called with the returned ID."""
     if not shutil.which("notify-send"):  # notifications are optional
         print(msg, flush=True)
-        return
+        return None
+    if persistent:
+        try:
+            r = subprocess.run(["notify-send", "-a", APP, "-u", "critical", "-p",
+                                "-h", "boolean:transient:true", msg],
+                               capture_output=True, text=True, timeout=2)
+            return r.stdout.strip() or None
+        except subprocess.TimeoutExpired:
+            return None
     subprocess.Popen(["notify-send", "-a", APP, "-t", "1500",
                       "-h", "boolean:transient:true", msg],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return None
+
+
+def close_notification(nid):
+    if nid and shutil.which("gdbus"):
+        subprocess.Popen(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+                          "--object-path", "/org/freedesktop/Notifications",
+                          "--method", "org.freedesktop.Notifications.CloseNotification", nid],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 # Small models tend to answer dictated questions instead of cleaning them; asking for the
@@ -144,6 +163,7 @@ class Dictation:
         self.kbd = UInput({ecodes.EV_KEY: self.paste_keys}, name=f"{APP}-keyboard")
         self.lock = threading.Lock()
         self.stream = None
+        self.indicator = None  # ID of the on-screen recording notification
         self.chunks = []
         self.last_press = 0.0
         self.last_take = None  # (audio, text) of the latest transcription
@@ -185,13 +205,15 @@ class Dictation:
                     samplerate=RATE, channels=1, dtype="float32",
                     callback=lambda data, *_: self.chunks.append(data.copy()))
                 self.stream.start()
-                notify("🎙 Listening (LLM cleanup)…" if rewrite else "🎙 Listening…")
+                self.indicator = notify("🎙 Recording (LLM cleanup)…" if rewrite else "🎙 Recording…",
+                                        persistent=True)
                 return
             # Drop the audio recorded between the key release (cut_at) and now.
             excess = int(max(0.0, time.monotonic() - cut_at) * RATE) if cut_at else 0
             self.stream.stop()
             self.stream.close()
             self.stream = None
+            close_notification(self.indicator)
             chunks, self.chunks = self.chunks, []
         audio = self.np.concatenate(chunks)[:, 0] if chunks else []
         if excess:
