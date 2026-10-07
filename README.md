@@ -98,9 +98,10 @@ copied file. The first start downloads the Whisper model (about 1.5 GB) to
 Use the full path; shortcut commands don't expand `~`. For other desktops, see
 [Other desktops](#other-desktops).
 
-**5. Optional: LLM cleanup.** Install [Ollama](https://ollama.com), then:
+**5. Optional: LLM cleanup.** Install Ollama ([Linux install guide](https://docs.ollama.com/linux)) and the cleanup model:
 
 ```bash
+curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.2
 ```
 
