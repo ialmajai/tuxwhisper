@@ -181,6 +181,19 @@ systemctl --user daemon-reload && systemctl --user restart tuxwhisper
 Audio comes from your default input device, which you can change in your desktop's sound
 settings.
 
+### Custom vocabulary
+
+List names and jargon Whisper keeps misspelling in `vocab.txt` next to `asr.py`, one per
+line (`#` starts a comment). Changes apply on the next take; no restart needed.
+
+```text
+TuxWhisper
+Ollama
+Kubernetes
+```
+
+Keep it short: long lists can make Whisper insert the words where they weren't said.
+
 ### CPU mode
 
 Without an NVIDIA GPU, install from `requirements.txt` and set `Environment=ASR_DEVICE=cpu`.
@@ -311,6 +324,7 @@ tuxwhisper.service     systemd user service template
 requirements.txt       Python dependencies
 requirements-cuda.txt  + NVIDIA CUDA libraries
 recordings/            saved takes (created by F4, not committed)
+vocab.txt              your custom vocabulary (optional, not committed)
 ```
 
 ## License

@@ -37,6 +37,8 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 PASTE_KEY = os.environ.get("ASR_PASTE_KEY", "shift+insert")
 RATE = 16000
 RECORDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
+# Names and jargon Whisper should spell right, one per line; re-read on every take.
+VOCAB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab.txt")
 
 
 def notify(msg):
@@ -117,6 +119,15 @@ def llm_cleanup(text):
     return cleaned or text
 
 
+def vocab():
+    try:
+        with open(VOCAB) as f:
+            words = [w.strip() for w in f if w.strip() and not w.startswith("#")]
+    except FileNotFoundError:
+        return None
+    return ", ".join(words) or None
+
+
 class Dictation:
     def __init__(self):
         import numpy as np
@@ -189,7 +200,7 @@ class Dictation:
             return
         t0 = time.time()
         segments, _ = self.model.transcribe(audio, language=LANGUAGE, beam_size=1,
-                                            vad_filter=True, initial_prompt=PROMPT)
+                                            vad_filter=True, initial_prompt=PROMPT, hotwords=vocab())
         text = " ".join(s.text.strip() for s in segments).strip()
         print(f"[{len(audio) / RATE:.1f}s audio (-{excess / RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
               flush=True)
