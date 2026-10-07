@@ -38,7 +38,7 @@ desktops should work but are untested; see [Other desktops](#other-desktops).
 | **F5** (tap) | Start recording. Tap again to stop, transcribe and paste. |
 | **F5** (hold) | Push-to-talk: speak while holding, release to transcribe and paste. |
 | **F3** | Same as F5, but the transcript is cleaned up by a local LLM before pasting. |
-| **F4** | Save the last take (audio + transcript) to `recordings/`. Fix the transcript first if it's wrong. |
+| **F4** | Save the last take (audio + transcript) to `recordings/`. Fix wrong transcripts in `metadata.csv`. |
 
 The keys are only suggestions; you choose them when you set up the shortcuts.
 
