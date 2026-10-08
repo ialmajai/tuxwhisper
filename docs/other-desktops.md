@@ -13,5 +13,5 @@ Bind the same commands in your desktop's shortcut settings:
 Where holding doesn't work, tap to start and tap again to stop.
 
 The systemd service starts with `graphical-session.target`, which some window managers (i3,
-or Sway without extra setup) never start. On those, skip step 3 of the Quick start and start the daemon from
-your WM config instead, e.g. `exec ~/tuxwhisper/asr serve`.
+or Sway without extra setup) never start. On those, skip step 3 of the Quick start
+and start the daemon from your WM config instead, e.g. `exec ~/tuxwhisper/asr serve`.

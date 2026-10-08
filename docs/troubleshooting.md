@@ -15,20 +15,20 @@ Check `systemctl --user status tuxwhisper`. Right after login, the model may sti
 </details>
 
 <details>
-<summary><b>It transcribes but nothing is pasted</b></summary>
+<summary><b>It transcribes but doesn't paste</b></summary>
 
 Run `getfacl /dev/uinput`; it should list `user:<you>:rw-`. If not, check the udev rule from
 step 2 of the Quick start, including the file name (it must start with a number below 73).
 </details>
 
 <details>
-<summary><b>It doesn't paste in one particular app</b></summary>
+<summary><b>It doesn't paste in one app</b></summary>
 
 That app may not treat Shift+Insert as paste. Try `ASR_PASTE_KEY=ctrl+v`.
 </details>
 
 <details>
-<summary><b>My old clipboard is pasted instead of the transcript</b></summary>
+<summary><b>It pastes my old clipboard instead of the transcript</b></summary>
 
 The app read the clipboard after TuxWhisper had restored it. Increase the `0.3` s delay in
 `paste()` in `asr.py`.

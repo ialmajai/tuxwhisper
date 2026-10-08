@@ -11,7 +11,7 @@ Pasted:   So can you explain how the attention mechanism works?
 
 - **Questions stay questions.** Dictate "what is a closure" and F3 pastes "What is a
   closure?" with no answer attached.
-- **Speed:** about 0.2–1 s once the model is loaded. The model unloads after 30 minutes
+- **Speed:** about 0.2–1 s once the model has loaded. The model unloads after 30 minutes
   idle to free GPU memory, so the next F3 takes a few seconds longer.
 - **Always pastes something:** if Ollama is unreachable, or the model doesn't fit in free
   GPU memory, F3 pastes the raw transcript and a notification tells you why.

@@ -19,13 +19,13 @@ Then apply the changes:
 systemctl --user daemon-reload && systemctl --user restart tuxwhisper
 ```
 
-Audio comes from your default input device, which you can change in your desktop's sound
+TuxWhisper records from your default input device; change it in your desktop's sound
 settings.
 
 ## Custom vocabulary
 
 List names and jargon Whisper keeps misspelling in `vocab.txt` next to `asr.py`, one per
-line (`#` starts a comment). Changes apply on the next take; no restart needed.
+line (`#` starts a comment). TuxWhisper re-reads the file on every take, so you don't need to restart.
 
 ```text
 TuxWhisper
@@ -33,7 +33,7 @@ Ollama
 Kubernetes
 ```
 
-Keep it short: long lists can make Whisper insert the words where they weren't said.
+Keep it short: long lists can make Whisper insert the words where you didn't say them.
 
 ## CPU mode
 
