@@ -9,6 +9,7 @@ Settings are environment variables. Add them to the `[Service]` section of
 | `ASR_DEVICE` | `cuda` | `cuda` or `cpu` |
 | `ASR_MODEL` | `large-v3-turbo` (GPU), `small` (CPU) | Any faster-whisper model name or path |
 | `ASR_PROMPT` | a short punctuated sentence | Style example for Whisper; keeps capitals and punctuation. Set to empty to disable. |
+| `ASR_SOUNDS` | `1` | `0` turns off the start and stop sounds |
 | `ASR_PASTE_KEY` | `shift+insert` | `shift+insert`, `ctrl+v` or `ctrl+shift+v` |
 | `ASR_REWRITE_MODEL` | `llama3.2` | Ollama model used by F3 |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server used by F3 |

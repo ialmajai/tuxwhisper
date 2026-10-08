@@ -35,6 +35,7 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 # Shift+Insert pastes in browsers, editors and terminals alike, and unlike Ctrl+V it doesn't
 # depend on the keyboard layout (keys are sent by position, so Ctrl+V is Ctrl+K on Dvorak).
 PASTE_KEY = os.environ.get("ASR_PASTE_KEY", "shift+insert")
+SOUNDS = os.environ.get("ASR_SOUNDS", "1") != "0"  # beep on start and stop
 RATE = 16000
 RECORDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
 # Names and jargon Whisper should spell right, one per line; re-read on every take.
@@ -59,6 +60,20 @@ def notify(msg, persistent=False):
                       "-h", "boolean:transient:true", msg],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return None
+
+
+def sound(name):
+    """Play a freedesktop theme sound; silently skipped if no player or file is found."""
+    path = f"/usr/share/sounds/freedesktop/stereo/{name}.oga"
+    # Volume is relative to the system volume, so 0.4 is always quieter than other sounds.
+    if shutil.which("pw-play"):
+        cmd = ["pw-play", "--volume=0.4", path]
+    elif shutil.which("paplay"):
+        cmd = ["paplay", f"--volume={int(0.4 * 65536)}", path]
+    else:
+        return
+    if SOUNDS and os.path.exists(path):
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def close_notification(nid):
@@ -201,6 +216,7 @@ class Dictation:
             if self.stream is None:
                 self.chunks = []
                 self.rewrite = rewrite  # mode is set by the key that started the take
+                sound("device-added")  # 0.2 s; over before the mic finishes opening
                 self.stream = self.sd.InputStream(
                     samplerate=RATE, channels=1, dtype="float32",
                     callback=lambda data, *_: self.chunks.append(data.copy()))
@@ -214,6 +230,7 @@ class Dictation:
             self.stream.close()
             self.stream = None
             close_notification(self.indicator)
+            sound("device-removed")
             chunks, self.chunks = self.chunks, []
         audio = self.np.concatenate(chunks)[:, 0] if chunks else []
         if excess:
