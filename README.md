@@ -95,7 +95,7 @@ Click into any text box, press F5 and speak.
 
 - [LLM cleanup (F3)](docs/llm-cleanup.md)
 - [Saving takes for fine-tuning (F4)](docs/saving-takes.md)
-- [Configuration](docs/configuration.md): language, model, custom vocabulary, CPU mode, paste key
+- [Configuration](docs/configuration.md): language, model, custom vocabulary, replacements, CPU mode, paste key
 - [Other desktops](docs/other-desktops.md)
 - [How it works](docs/how-it-works.md)
 - [Security](docs/security.md)

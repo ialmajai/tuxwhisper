@@ -36,6 +36,24 @@ Kubernetes
 
 Keep it short: long lists can make Whisper insert the words where you didn't say them.
 
+## Replacements
+
+List fixed rewrites in `replacements.txt` next to `asr.py`, one `spoken => written` rule per
+line. TuxWhisper applies them to the text before pasting, on F5 and F3, matching whole words
+in any case. `\n` inserts a line break, and a line-break rule also removes the punctuation
+Whisper puts around it.
+
+```text
+new paragraph => \n\n
+new line => \n
+tux whisper => TuxWhisper
+my email => you@example.com
+```
+
+Like `vocab.txt`, the file is re-read on every take. Saved takes (F4) keep Whisper's original
+text, which matches the audio. Pick phrases you won't say for real: a `comma => ,` rule also
+fires when you mean the word.
+
 ## CPU mode
 
 Without an NVIDIA GPU, install from `requirements.txt` and set `Environment=ASR_DEVICE=cpu`.

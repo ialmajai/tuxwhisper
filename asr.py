@@ -12,6 +12,7 @@ import csv
 import datetime
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -40,6 +41,8 @@ RATE = 16000
 RECORDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
 # Names and jargon Whisper should spell right, one per line; re-read on every take.
 VOCAB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab.txt")
+# "spoken words => text" rules applied before pasting; re-read on every take.
+REPLACEMENTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "replacements.txt")
 
 
 def notify(msg, persistent=False):
@@ -162,6 +165,23 @@ def vocab():
     return ", ".join(words) or None
 
 
+def apply_replacements(text):
+    try:
+        with open(REPLACEMENTS) as f:
+            rules = [line.split("=>", 1) for line in f if "=>" in line and not line.startswith("#")]
+    except FileNotFoundError:
+        return text
+    for spoken, written in rules:
+        spoken, written = spoken.strip(), written.strip().replace("\\n", "\n")
+        # Whole words, any case. A line-break rule also eats the punctuation and spaces
+        # Whisper puts around it ("Hello. New line. World." -> "Hello.\nWorld.").
+        pattern = r"\b" + re.escape(spoken) + r"\b"
+        if not written.strip():
+            pattern = r"[ ,]*" + pattern + r"[.,]?[ ]*"
+        text = re.sub(pattern, lambda _, w=written: w, text, flags=re.IGNORECASE)
+    return text
+
+
 class Dictation:
     def __init__(self):
         import numpy as np
@@ -250,7 +270,7 @@ class Dictation:
             t0 = time.time()
             text = llm_cleanup(text)
             print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
-        self.paste(text + " ")
+        self.paste(apply_replacements(text) + " ")
 
     def save(self):
         """Write the last take as recordings/<timestamp>.wav + a row in metadata.csv
