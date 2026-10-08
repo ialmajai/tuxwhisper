@@ -18,3 +18,31 @@ jobs:
       - run: ruff check
       - run: shellcheck asr
       - run: python -c "import faster_whisper, numpy, sounddevice, evdev"
+
+  # Follows the Quick start install on other distros; no mic or desktop, so no dictation.
+  distros:
+    name: ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: fedora:latest
+            deps: dnf install -y gcc kernel-headers portaudio xclip wl-clipboard tar gzip
+          - image: archlinux:latest
+            deps: pacman -Syu --noconfirm gcc linux-api-headers portaudio xclip wl-clipboard
+          - image: debian:stable
+            deps: apt-get update && apt-get install -y curl ca-certificates gcc linux-libc-dev libportaudio2 xclip wl-clipboard
+          - image: opensuse/tumbleweed
+            deps: zypper -n install curl tar gzip gawk gcc linux-glibc-devel portaudio xclip wl-clipboard
+    container: ${{ matrix.image }}
+    steps:
+      - run: ${{ matrix.deps }}
+      - uses: actions/checkout@v5
+      - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
+      - run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv venv --python 3.12 .venv
+          uv pip install --python .venv -r requirements.txt
+          .venv/bin/python -c "import faster_whisper, numpy, sounddevice, evdev"
+          command -v xclip wl-copy

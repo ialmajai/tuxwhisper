@@ -1,0 +1,57 @@
+name: Compatibility report
+description: Tell us whether TuxWhisper works on your distro and desktop
+title: "[Compat] <distro> / <desktop>"
+labels: [compatibility]
+body:
+  - type: input
+    id: distro
+    attributes:
+      label: Distro and version
+      placeholder: Fedora 43
+    validations:
+      required: true
+  - type: input
+    id: desktop
+    attributes:
+      label: Desktop or window manager
+      placeholder: KDE Plasma 6.4
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Session
+      options: [Wayland, X11]
+    validations:
+      required: true
+  - type: dropdown
+    id: device
+    attributes:
+      label: Whisper runs on
+      options: [NVIDIA GPU, CPU mode]
+    validations:
+      required: true
+  - type: checkboxes
+    id: works
+    attributes:
+      label: What works
+      options:
+        - label: Daemon starts at login
+        - label: Tap to start and stop
+        - label: Hold to talk
+        - label: Pastes in a browser
+        - label: Pastes in a terminal
+        - label: Clipboard is restored afterwards
+        - label: F3 LLM cleanup
+        - label: F4 saving takes
+  - type: textarea
+    id: notes
+    attributes:
+      label: Problems or notes
+      description: What went wrong, and anything you changed to make it work.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Output of `journalctl --user -u tuxwhisper -n 50`
+      render: text
