@@ -561,10 +561,29 @@ def send(cmd):
         sys.exit(1)
 
 
-LANGUAGES = {"en": "English", "ar": "Arabic", "de": "German", "es": "Spanish", "fr": "French",
-             "hi": "Hindi", "it": "Italian", "ja": "Japanese", "ko": "Korean", "nl": "Dutch",
-             "pl": "Polish", "pt": "Portuguese", "ru": "Russian", "tr": "Turkish",
-             "uk": "Ukrainian", "zh": "Chinese"}
+# Every language Whisper knows, roughly by total speakers (native and second language).
+LANGUAGES = {
+    "en": "English", "zh": "Chinese", "hi": "Hindi", "es": "Spanish", "fr": "French",
+    "ar": "Arabic", "bn": "Bengali", "pt": "Portuguese", "ru": "Russian", "ur": "Urdu",
+    "id": "Indonesian", "de": "German", "ja": "Japanese", "mr": "Marathi", "te": "Telugu",
+    "tr": "Turkish", "ta": "Tamil", "yue": "Cantonese", "vi": "Vietnamese", "tl": "Tagalog",
+    "ko": "Korean", "fa": "Persian", "ha": "Hausa", "sw": "Swahili", "jw": "Javanese",
+    "it": "Italian", "pa": "Punjabi", "ms": "Malay", "gu": "Gujarati", "th": "Thai",
+    "kn": "Kannada", "am": "Amharic", "yo": "Yoruba", "pl": "Polish", "ml": "Malayalam",
+    "uk": "Ukrainian", "my": "Burmese", "su": "Sundanese", "uz": "Uzbek", "ln": "Lingala",
+    "ro": "Romanian", "sd": "Sindhi", "nl": "Dutch", "ps": "Pashto", "ne": "Nepali",
+    "mg": "Malagasy", "az": "Azerbaijani", "so": "Somali", "si": "Sinhala", "km": "Khmer",
+    "as": "Assamese", "el": "Greek", "hu": "Hungarian", "sn": "Shona", "cs": "Czech",
+    "sv": "Swedish", "ht": "Haitian Creole", "kk": "Kazakh", "sr": "Serbian", "be": "Belarusian",
+    "bg": "Bulgarian", "he": "Hebrew", "tg": "Tajik", "da": "Danish", "fi": "Finnish",
+    "sk": "Slovak", "no": "Norwegian", "hr": "Croatian", "ka": "Georgian", "ca": "Catalan",
+    "hy": "Armenian", "sq": "Albanian", "lt": "Lithuanian", "tk": "Turkmen", "tt": "Tatar",
+    "mn": "Mongolian", "lo": "Lao", "bs": "Bosnian", "gl": "Galician", "sl": "Slovenian",
+    "lv": "Latvian", "mk": "Macedonian", "ba": "Bashkir", "et": "Estonian", "bo": "Tibetan",
+    "yi": "Yiddish", "eu": "Basque", "cy": "Welsh", "af": "Afrikaans", "nn": "Norwegian Nynorsk",
+    "lb": "Luxembourgish", "mt": "Maltese", "is": "Icelandic", "br": "Breton", "oc": "Occitan",
+    "mi": "Maori", "fo": "Faroese", "haw": "Hawaiian", "la": "Latin", "sa": "Sanskrit",
+}
 
 
 def zenity(*args):
@@ -633,7 +652,7 @@ def settings_menu():
         mode = current_mode()
         rows = ["sounds", "Sounds", ("On" if s["sounds"] else "Off") + tag["sounds"],
                 "sound_volume", "Sound volume", f"{s['sound_volume']}%" + tag["sound_volume"],
-                "language", "Language", (s["language"] or "auto-detect") + tag["language"],
+                "language", "Language", LANGUAGES.get(s["language"], "auto-detect") + tag["language"],
                 "paste_key", "Paste key", s["paste_key"] + tag["paste_key"],
                 "mode", "F3 mode", mode + tag["mode"],
                 "rewrite_model", "LLM model (F3)", s["rewrite_model"] + tag["rewrite_model"],
@@ -661,11 +680,16 @@ def settings_menu():
                 save_settings(cfg)
                 sound("device-added")  # preview
                 continue
-        elif choice in ("language", "paste_key"):
-            options = ["auto", *LANGUAGES] if choice == "language" else list(PASTE_KEYS)
-            picked = pick(choice.replace("_", " ").capitalize(), options, s[choice] or "auto")
+        elif choice == "language":
+            names = {"auto-detect": "", **{f"{n} ({c})": c for c, n in LANGUAGES.items()}}
+            current = next((n for n, c in names.items() if c == s["language"]), "auto-detect")
+            picked = pick("Language", list(names), current)
             if picked:
-                cfg[choice] = "" if picked == "auto" else picked
+                cfg["language"] = names[picked]
+        elif choice == "paste_key":
+            picked = pick("Paste key", list(PASTE_KEYS), s["paste_key"])
+            if picked:
+                cfg["paste_key"] = picked
         elif choice == "mode":
             picked = pick("F3 mode", list(modes()), mode)
             if picked:
