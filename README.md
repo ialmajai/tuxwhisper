@@ -11,6 +11,8 @@ words never reach a cloud service, and there's nothing to pay for.
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![X11 | Wayland](https://img.shields.io/badge/display-X11%20%7C%20Wayland-555)
 
+![TuxWhisper demo: hold F5, speak, and the text is typed into a chat box; F3 also removes filler words](docs/demo.gif)
+
 ## Features
 
 - **Private and free:** speech recognition ([faster-whisper](https://github.com/SYSTRAN/faster-whisper)
