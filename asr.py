@@ -14,6 +14,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -470,6 +471,26 @@ def edit_list(path, title, help_text):
             f.write(text + "\n")
 
 
+def pick(title, options, current):
+    return zenity("--list", "--radiolist", f"--title={title}", "--width=300", "--height=420",
+                  "--column=", "--column=Value",
+                  *[x for o in options for x in ("TRUE" if o == current else "FALSE", o)])
+
+
+def with_service_env():
+    """Re-run with the daemon's Environment= lines, so the menu shows the daemon's defaults."""
+    if os.environ.get("TUXWHISPER_SERVICE_ENV"):
+        return
+    try:
+        r = subprocess.run(["systemctl", "--user", "show", APP, "-p", "Environment", "--value"],
+                           capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):  # no systemd: use our own environment
+        return
+    env = dict(os.environ, TUXWHISPER_SERVICE_ENV="1")
+    env.update(item.split("=", 1) for item in shlex.split(r.stdout) if "=" in item)
+    os.execve(sys.executable, [sys.executable, os.path.abspath(__file__), "settings"], env)
+
+
 def save_settings(s):
     """Write only the given settings, so unchanged ones keep following the environment."""
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
@@ -514,15 +535,23 @@ def settings_menu():
                 continue
         elif choice in ("language", "paste_key"):
             options = LANGUAGES if choice == "language" else list(PASTE_KEYS)
-            current = s[choice] or "auto"
-            picked = zenity("--list", "--radiolist", f"--title={choice.replace('_', ' ').capitalize()}",
-                            "--width=300", "--height=420", "--column=", "--column=Value",
-                            *[x for o in options for x in ("TRUE" if o == current else "FALSE", o)])
+            picked = pick(choice.replace("_", " ").capitalize(), options, s[choice] or "auto")
             if picked:
                 cfg[choice] = "" if picked == "auto" else picked
         elif choice == "rewrite_model":
-            picked = zenity("--entry", "--title=LLM model", "--text=Ollama model used by F3:",
-                            f"--entry-text={s['rewrite_model']}")
+            # Offer only installed models, so F3 can't be pointed at one that doesn't exist.
+            try:
+                models = sorted(m["name"] for m in ollama("/api/tags", timeout=3)["models"])
+            except (OSError, ValueError, KeyError):
+                zenity("--error", "--title=LLM model",
+                       f"--text=Can't reach Ollama at {OLLAMA_URL}. Start it and try again.")
+                continue
+            if not models:
+                zenity("--info", "--title=LLM model",
+                       "--text=No Ollama models installed. Install one with: ollama pull llama3.2")
+                continue
+            current = s["rewrite_model"]
+            picked = pick("LLM model", models, current if ":" in current else current + ":latest")
             if picked:
                 cfg["rewrite_model"] = picked
         elif choice == "vocab":
@@ -542,6 +571,7 @@ if __name__ == "__main__":
     elif cmd in ("toggle", "rewrite", "save"):
         send(cmd)
     elif cmd == "settings":
+        with_service_env()
         settings_menu()
     else:
         sys.exit(__doc__)
