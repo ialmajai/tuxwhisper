@@ -79,16 +79,17 @@ def settings():
     return s
 
 
-def notify(msg, persistent=False):
+def notify(msg, persistent=False, body=None):
     """Show a desktop notification. persistent=True keeps it on screen until
     close_notification() is called with the returned ID."""
+    extra = [body] if body else []
     if not shutil.which("notify-send"):  # notifications are optional
         print(msg, flush=True)
         return None
     if persistent:
         try:
             r = subprocess.run(["notify-send", "-a", APP, "-u", "critical", "-p",
-                                "-h", "boolean:transient:true", msg],
+                                "-h", "boolean:transient:true", msg, *extra],
                                capture_output=True, text=True, timeout=2)
             return r.stdout.strip() or None
         except subprocess.TimeoutExpired:
@@ -96,6 +97,22 @@ def notify(msg, persistent=False):
     subprocess.Popen(["notify-send", "-a", APP, "-t", "1500",
                       "-h", "boolean:transient:true", msg],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return None
+
+
+def settings_shortcut():
+    """The GNOME shortcut bound to `asr settings`, e.g. "Alt+F9", or None."""
+    def get(*args):
+        r = subprocess.run(["gsettings", "get", *args], capture_output=True, text=True, timeout=2)
+        return r.stdout.strip().strip("'")
+    schema = "org.gnome.settings-daemon.plugins.media-keys"
+    try:
+        for path in re.findall(r"'([^']+)'", get(schema, "custom-keybindings")):
+            if get(f"{schema}.custom-keybinding:{path}", "command").endswith("asr settings"):
+                binding = get(f"{schema}.custom-keybinding:{path}", "binding")
+                return re.sub(r"<(\w+)>", r"\1+", binding).replace("Primary", "Ctrl") or None
+    except (FileNotFoundError, subprocess.TimeoutExpired):  # not GNOME
+        pass
     return None
 
 
@@ -233,6 +250,8 @@ class Dictation:
         self.lock = threading.Lock()
         self.stream = None
         self.indicator = None  # ID of the on-screen recording notification
+        key = settings_shortcut()  # looked up once; shown as a hint while recording
+        self.hint = f"<i>⚙ {key}</i>" if key else None  # GNOME allows only b/i/u markup
         self.chunks = []
         self.last_press = 0.0
         self.last_take = None  # (audio, text) of the latest transcription
@@ -276,7 +295,7 @@ class Dictation:
                     callback=lambda data, *_: self.chunks.append(data.copy()))
                 self.stream.start()
                 self.indicator = notify("🎙 Recording (LLM cleanup)…" if rewrite else "🎙 Recording…",
-                                        persistent=True)
+                                        persistent=True, body=self.hint)
                 return
             # Drop the audio recorded between the key release (cut_at) and now.
             excess = int(max(0.0, time.monotonic() - cut_at) * RATE) if cut_at else 0
