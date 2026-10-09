@@ -68,7 +68,8 @@ def read_config():
 def settings():
     """Live settings: environment defaults overridden by the config file, re-read on every use."""
     s = {"sounds": SOUNDS, "sound_volume": SOUND_VOLUME, "language": LANGUAGE or "",
-         "paste_key": PASTE_KEY, "rewrite_model": REWRITE_MODEL, "mode": "Clean up"}
+         "paste_key": PASTE_KEY, "rewrite_model": REWRITE_MODEL, "mode": "Clean up",
+         "mode_models": {}}
     s.update({k: v for k, v in read_config().items() if k in s})
     try:
         s["sound_volume"] = min(max(int(s["sound_volume"]), 0), 100)
@@ -76,6 +77,8 @@ def settings():
         s["sound_volume"] = 40
     if s["paste_key"] not in PASTE_KEYS:
         s["paste_key"] = "shift+insert"
+    if not isinstance(s["mode_models"], dict):
+        s["mode_models"] = {}
     return s
 
 
@@ -181,7 +184,7 @@ def rewrite_model_on_gpu():
 
     Running on the CPU makes cleanup slow, so a model that doesn't fit is not used.
     """
-    model = settings()["rewrite_model"]
+    model = mode_model()
     name = model if ":" in model else model + ":latest"
     def loaded():
         return next((m for m in ollama("/api/ps")["models"] if m["name"] == name), None)
@@ -220,6 +223,12 @@ def current_mode():
     return mode if mode in modes() else "Clean up"  # e.g. a custom mode was deleted
 
 
+def mode_model():
+    """The current mode's own model, else the default rewrite model."""
+    s = settings()
+    return s["mode_models"].get(current_mode()) or s["rewrite_model"]
+
+
 def llm_cleanup(text):
     """LLM-cleaned transcript, or the original text if Ollama fails or lacks GPU memory."""
     try:
@@ -228,7 +237,7 @@ def llm_cleanup(text):
             notify("Not enough GPU memory for LLM cleanup, pasted raw transcript")
             return text
         r = ollama("/api/chat", {
-            "model": settings()["rewrite_model"], "stream": False, "keep_alive": "30m", "think": False,
+            "model": mode_model(), "stream": False, "keep_alive": "30m", "think": False,
             "options": OLLAMA_OPTIONS,
             "format": {"type": "object", "properties": {"cleaned": {"type": "string"}},
                        "required": ["cleaned"]},
@@ -568,9 +577,11 @@ def edit_list(path, title, help_text):
 
 
 def pick(title, options, current):
-    return zenity("--list", "--radiolist", f"--title={title}", "--width=300", "--height=420",
-                  "--column=", "--column=Value",
-                  *[x for o in options for x in ("TRUE" if o == current else "FALSE", o)])
+    # A plain list, not --radiolist: there, clicking a row's text doesn't tick its button,
+    # so Select silently returned the old value.
+    return zenity("--list", f"--title={title}", "--width=300", "--height=420",
+                  "--column=Current", "--column=Value", "--print-column=2",
+                  *[x for o in options for x in ("✓" if o == current else "", o)])
 
 
 def with_service_env():
@@ -587,12 +598,20 @@ def with_service_env():
     os.execve(sys.executable, [sys.executable, os.path.abspath(__file__), "settings"], env)
 
 
+def toml_value(v):
+    if isinstance(v, bool):
+        return str(v).lower()
+    if isinstance(v, dict):  # inline table
+        return "{ " + ", ".join(f"{json.dumps(k)} = {json.dumps(x)}" for k, x in v.items()) + " }"
+    return json.dumps(v)
+
+
 def save_settings(s):
     """Write only the given settings, so unchanged ones keep following the environment."""
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
     with open(CONFIG, "w") as f:
         f.write("# Written by `asr settings`; overrides the ASR_* environment variables.\n")
-        f.writelines(f"{k} = {str(v).lower() if isinstance(v, bool) else json.dumps(v)}\n"
+        f.writelines(f"{k} = {toml_value(v)}\n"
                      for k, v in s.items())
 
 
@@ -603,12 +622,14 @@ def settings_menu():
         s, cfg = settings(), read_config()
         # The menu can't see the service's environment, so unchanged settings say so.
         tag = {k: "" if k in cfg else " (default)" for k in s}
+        mode = current_mode()
         rows = ["sounds", "Sounds", ("On" if s["sounds"] else "Off") + tag["sounds"],
                 "sound_volume", "Sound volume", f"{s['sound_volume']}%" + tag["sound_volume"],
                 "language", "Language", (s["language"] or "auto-detect") + tag["language"],
                 "paste_key", "Paste key", s["paste_key"] + tag["paste_key"],
-                "mode", "F3 mode", current_mode() + tag["mode"],
+                "mode", "F3 mode", mode + tag["mode"],
                 "rewrite_model", "LLM model (F3)", s["rewrite_model"] + tag["rewrite_model"],
+                "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as LLM model"),
                 "history", "Recent transcripts", f"{len(load_history())} this session",
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…",
@@ -638,7 +659,7 @@ def settings_menu():
             if picked:
                 cfg[choice] = "" if picked == "auto" else picked
         elif choice == "mode":
-            picked = pick("F3 mode", list(modes()), current_mode())
+            picked = pick("F3 mode", list(modes()), mode)
             if picked:
                 cfg["mode"] = picked
         elif choice == "modes":
@@ -646,7 +667,7 @@ def settings_menu():
                       "# One mode per line: Name => instruction for the LLM, e.g.\n"
                       "# Tweet => Rewrite as a tweet under 280 characters.\n")
             continue
-        elif choice == "rewrite_model":
+        elif choice in ("rewrite_model", "mode_model"):
             # Offer only installed models, so F3 can't be pointed at one that doesn't exist.
             try:
                 models = sorted(m["name"] for m in ollama("/api/tags", timeout=3)["models"])
@@ -658,10 +679,18 @@ def settings_menu():
                 zenity("--info", "--title=LLM model",
                        "--text=No Ollama models installed. Install one with: ollama pull llama3.2")
                 continue
-            current = s["rewrite_model"]
-            picked = pick("LLM model", models, current if ":" in current else current + ":latest")
-            if picked:
-                cfg["rewrite_model"] = picked
+            if choice == "rewrite_model":
+                current = s["rewrite_model"]
+                picked = pick("LLM model", models, current if ":" in current else current + ":latest")
+                if picked:
+                    cfg["rewrite_model"] = picked
+            else:
+                same = "same as LLM model"
+                picked = pick(f"Model for {mode}", [same, *models], s["mode_models"].get(mode, same))
+                if picked:
+                    cfg["mode_models"] = {k: v for k, v in s["mode_models"].items() if k != mode}
+                    if picked != same:
+                        cfg["mode_models"][mode] = picked
         elif choice == "history":
             items = load_history()[::-1]  # newest first
             if not items:
