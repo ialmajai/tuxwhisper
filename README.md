@@ -2,8 +2,8 @@
 
 **Private, offline dictation for Linux.** Press a key, speak, and your words are typed
 wherever your cursor is: a browser text box, an LLM chat prompt, your editor or your
-terminal. Everything runs on your own machine, so your voice and your words never reach a
-cloud service.
+terminal. Everything runs on your own machine with free, open models, so your voice and your
+words never reach a cloud service, and there's nothing to pay for.
 
 [![CI](https://github.com/ialmajai/tuxwhisper/actions/workflows/ci.yml/badge.svg)](https://github.com/ialmajai/tuxwhisper/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -13,8 +13,10 @@ cloud service.
 
 ## Features
 
-- **Private:** speech recognition ([faster-whisper](https://github.com/SYSTRAN/faster-whisper))
-  and the optional LLM cleanup both run locally. No account, no API key, no telemetry.
+- **Private and free:** speech recognition ([faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+  with OpenAI's open Whisper model) and the optional LLM cleanup (Meta's Llama 3.2 by default)
+  run locally. The models are free to download: no account, no API key, no subscription, no
+  telemetry.
 - **Types anywhere:** browsers, editors, terminals, on X11 and Wayland (including GNOME).
 - **Fast:** about half a second from releasing the key to text on screen, with an NVIDIA GPU.
 - **Tap or hold:** tap to start and stop, or hold to talk.
