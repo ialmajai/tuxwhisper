@@ -5,6 +5,7 @@
   asr.py toggle   start recording / stop, transcribe and paste at the cursor
   asr.py rewrite  same, but clean up the transcript with a local LLM (Ollama) first
   asr.py save     save the last recording + its transcript to recordings/
+  asr.py settings open the settings menu (needs zenity)
 
 Bind `asr toggle` (and optionally `rewrite`, `save`) to keys in your desktop's shortcut settings.
 """
@@ -19,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
 import wave
@@ -37,12 +39,43 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 # depend on the keyboard layout (keys are sent by position, so Ctrl+V is Ctrl+K on Dvorak).
 PASTE_KEY = os.environ.get("ASR_PASTE_KEY", "shift+insert")
 SOUNDS = os.environ.get("ASR_SOUNDS", "1") != "0"  # beep on start and stop
+# Percent of the system volume, so the beeps never get louder than your other sounds.
+SOUND_VOLUME = int(os.environ.get("ASR_SOUND_VOLUME", "40"))
+PASTE_KEYS = {"shift+insert": ["KEY_LEFTSHIFT", "KEY_INSERT"],
+              "ctrl+v": ["KEY_LEFTCTRL", "KEY_V"],
+              "ctrl+shift+v": ["KEY_LEFTCTRL", "KEY_LEFTSHIFT", "KEY_V"]}
+# The settings menu writes here; its values override the environment variables above.
+CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                      APP, "config.toml")
 RATE = 16000
 RECORDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
 # Names and jargon Whisper should spell right, one per line; re-read on every take.
 VOCAB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab.txt")
 # "spoken words => text" rules applied before pasting; re-read on every take.
 REPLACEMENTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "replacements.txt")
+
+
+def read_config():
+    """Only the settings changed in the menu."""
+    try:
+        with open(CONFIG, "rb") as f:
+            return tomllib.load(f)
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def settings():
+    """Live settings: environment defaults overridden by the config file, re-read on every use."""
+    s = {"sounds": SOUNDS, "sound_volume": SOUND_VOLUME, "language": LANGUAGE or "",
+         "paste_key": PASTE_KEY, "rewrite_model": REWRITE_MODEL}
+    s.update({k: v for k, v in read_config().items() if k in s})
+    try:
+        s["sound_volume"] = min(max(int(s["sound_volume"]), 0), 100)
+    except (TypeError, ValueError):
+        s["sound_volume"] = 40
+    if s["paste_key"] not in PASTE_KEYS:
+        s["paste_key"] = "shift+insert"
+    return s
 
 
 def notify(msg, persistent=False):
@@ -68,14 +101,14 @@ def notify(msg, persistent=False):
 def sound(name):
     """Play a freedesktop theme sound; silently skipped if no player or file is found."""
     path = f"/usr/share/sounds/freedesktop/stereo/{name}.oga"
-    # Volume is relative to the system volume, so 0.4 is always quieter than other sounds.
+    volume = settings()["sound_volume"] / 100
     if shutil.which("pw-play"):
-        cmd = ["pw-play", "--volume=0.4", path]
+        cmd = ["pw-play", f"--volume={volume}", path]
     elif shutil.which("paplay"):
-        cmd = ["paplay", f"--volume={int(0.4 * 65536)}", path]
+        cmd = ["paplay", f"--volume={int(volume * 65536)}", path]
     else:
         return
-    if SOUNDS and os.path.exists(path):
+    if settings()["sounds"] and os.path.exists(path):
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -114,13 +147,14 @@ def rewrite_model_on_gpu():
 
     Running on the CPU makes cleanup slow, so a model that doesn't fit is not used.
     """
-    name = REWRITE_MODEL if ":" in REWRITE_MODEL else REWRITE_MODEL + ":latest"
+    model = settings()["rewrite_model"]
+    name = model if ":" in model else model + ":latest"
     def loaded():
         return next((m for m in ollama("/api/ps")["models"] if m["name"] == name), None)
     m = loaded()
     if m is None:  # an empty generate request just loads the model
         try:
-            ollama("/api/generate", {"model": REWRITE_MODEL, "keep_alive": "30m",
+            ollama("/api/generate", {"model": model, "keep_alive": "30m",
                                      "options": OLLAMA_OPTIONS})
         except urllib.error.HTTPError as e:
             if b"out of memory" in e.read():
@@ -129,7 +163,7 @@ def rewrite_model_on_gpu():
         m = loaded()
     if m and m["size_vram"] >= m["size"]:
         return True
-    ollama("/api/generate", {"model": REWRITE_MODEL, "keep_alive": 0})  # unload
+    ollama("/api/generate", {"model": model, "keep_alive": 0})  # unload
     return False
 
 
@@ -141,7 +175,7 @@ def llm_cleanup(text):
             notify("Not enough GPU memory for LLM cleanup, pasted raw transcript")
             return text
         r = ollama("/api/chat", {
-            "model": REWRITE_MODEL, "stream": False, "keep_alive": "30m", "think": False,
+            "model": settings()["rewrite_model"], "stream": False, "keep_alive": "30m", "think": False,
             "options": OLLAMA_OPTIONS,
             "format": {"type": "object", "properties": {"cleaned": {"type": "string"}},
                        "required": ["cleaned"]},
@@ -192,10 +226,9 @@ class Dictation:
         self.np, self.sd, self.ec = np, sd, ecodes
         self.model = load_model(WhisperModel)
         self.model.transcribe(np.zeros(RATE, dtype=np.float32))  # warm-up
-        self.paste_keys = {"ctrl+v": [ecodes.KEY_LEFTCTRL, ecodes.KEY_V],
-                           "ctrl+shift+v": [ecodes.KEY_LEFTCTRL, ecodes.KEY_LEFTSHIFT, ecodes.KEY_V],
-                           "shift+insert": [ecodes.KEY_LEFTSHIFT, ecodes.KEY_INSERT]}[PASTE_KEY]
-        self.kbd = UInput({ecodes.EV_KEY: self.paste_keys}, name=f"{APP}-keyboard")
+        # Register every paste key so the menu can switch between them without a restart.
+        all_keys = sorted({getattr(ecodes, k) for keys in PASTE_KEYS.values() for k in keys})
+        self.kbd = UInput({ecodes.EV_KEY: all_keys}, name=f"{APP}-keyboard")
         self.lock = threading.Lock()
         self.stream = None
         self.indicator = None  # ID of the on-screen recording notification
@@ -258,7 +291,7 @@ class Dictation:
         if len(audio) < RATE * 0.3:  # too short to be speech; Whisper hallucinates on these
             return
         t0 = time.time()
-        segments, _ = self.model.transcribe(audio, language=LANGUAGE, beam_size=1,
+        segments, _ = self.model.transcribe(audio, language=settings()["language"] or None, beam_size=1,
                                             vad_filter=True, initial_prompt=PROMPT, hotwords=vocab())
         text = " ".join(s.text.strip() for s in segments).strip()
         print(f"[{len(audio) / RATE:.1f}s audio (-{excess / RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
@@ -304,13 +337,15 @@ class Dictation:
         # Clipboard + a paste shortcut handles any Unicode and works on X11 and Wayland.
         # Some apps (e.g. terminals) paste the primary selection on Shift+Insert, so set both;
         # the Ctrl shortcuts always paste the clipboard.
-        selections = ("clipboard", "primary") if PASTE_KEY == "shift+insert" else ("clipboard",)
+        paste_key = settings()["paste_key"]
+        keys = [getattr(self.ec, k) for k in PASTE_KEYS[paste_key]]
+        selections = ("clipboard", "primary") if paste_key == "shift+insert" else ("clipboard",)
         saved = {sel: clipboard_get(sel) for sel in selections}
         for sel in saved:
             clipboard_set(text, sel)
         time.sleep(0.05)
         ec, k = self.ec, self.kbd
-        presses = [(c, 1) for c in self.paste_keys] + [(c, 0) for c in reversed(self.paste_keys)]
+        presses = [(c, 1) for c in keys] + [(c, 0) for c in reversed(keys)]
         for code, val in presses:
             k.write(ec.EV_KEY, code, val)
             k.syn()
@@ -414,11 +449,99 @@ def send(cmd):
         sys.exit(1)
 
 
+LANGUAGES = ["auto", "en", "ar", "de", "es", "fr", "hi", "it", "ja", "ko", "nl", "pl", "pt",
+             "ru", "tr", "uk", "zh"]
+
+
+def zenity(*args):
+    r = subprocess.run(["zenity", *args], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def edit_list(path, title, help_text):
+    """Edit a vocab/replacements file in a dialog; the file keeps its comments."""
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write(help_text)
+    text = zenity("--text-info", "--editable", f"--filename={path}", f"--title={title}",
+                  "--width=520", "--height=420", "--ok-label=Save")
+    if text is not None:
+        with open(path, "w") as f:
+            f.write(text + "\n")
+
+
+def save_settings(s):
+    """Write only the given settings, so unchanged ones keep following the environment."""
+    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    with open(CONFIG, "w") as f:
+        f.write("# Written by `asr settings`; overrides the ASR_* environment variables.\n")
+        f.writelines(f"{k} = {str(v).lower() if isinstance(v, bool) else json.dumps(v)}\n"
+                     for k, v in s.items())
+
+
+def settings_menu():
+    if not shutil.which("zenity"):
+        sys.exit("The settings menu needs zenity (e.g. sudo apt install zenity).")
+    while True:
+        s, cfg = settings(), read_config()
+        # The menu can't see the service's environment, so unchanged settings say so.
+        tag = {k: "" if k in cfg else " (default)" for k in s}
+        rows = ["sounds", "Sounds", ("On" if s["sounds"] else "Off") + tag["sounds"],
+                "sound_volume", "Sound volume", f"{s['sound_volume']}%" + tag["sound_volume"],
+                "language", "Language", (s["language"] or "auto-detect") + tag["language"],
+                "paste_key", "Paste key", s["paste_key"] + tag["paste_key"],
+                "rewrite_model", "LLM model (F3)", s["rewrite_model"] + tag["rewrite_model"],
+                "vocab", "Vocabulary", "Edit…",
+                "replacements", "Replacements", "Edit…"]
+        choice = zenity("--list", "--title=TuxWhisper settings", "--width=440", "--height=360",
+                        "--text=Pick a setting to change. Changes apply on the next take.",
+                        "--column=key", "--column=Setting", "--column=Value",
+                        "--hide-column=1", "--print-column=1",
+                        "--ok-label=Change", "--cancel-label=Close", *rows)
+        if not choice:
+            return
+        choice = choice.split("|")[0]
+        if choice == "sounds":
+            cfg["sounds"] = not s["sounds"]
+        elif choice == "sound_volume":
+            picked = zenity("--scale", "--title=Sound volume", "--min-value=0", "--max-value=100",
+                            "--step=5", f"--value={s['sound_volume']}",
+                            "--text=Percent of your system volume:")
+            if picked:
+                cfg["sound_volume"] = int(picked)
+                save_settings(cfg)
+                sound("device-added")  # preview
+                continue
+        elif choice in ("language", "paste_key"):
+            options = LANGUAGES if choice == "language" else list(PASTE_KEYS)
+            current = s[choice] or "auto"
+            picked = zenity("--list", "--radiolist", f"--title={choice.replace('_', ' ').capitalize()}",
+                            "--width=300", "--height=420", "--column=", "--column=Value",
+                            *[x for o in options for x in ("TRUE" if o == current else "FALSE", o)])
+            if picked:
+                cfg[choice] = "" if picked == "auto" else picked
+        elif choice == "rewrite_model":
+            picked = zenity("--entry", "--title=LLM model", "--text=Ollama model used by F3:",
+                            f"--entry-text={s['rewrite_model']}")
+            if picked:
+                cfg["rewrite_model"] = picked
+        elif choice == "vocab":
+            edit_list(VOCAB, "Vocabulary", "# Names and jargon Whisper should spell right, one per line.\n")
+            continue
+        elif choice == "replacements":
+            edit_list(REPLACEMENTS, "Replacements",
+                      "# One rule per line: spoken words => written text. \\n is a line break.\n")
+            continue
+        save_settings(cfg)
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "serve":
         serve()
     elif cmd in ("toggle", "rewrite", "save"):
         send(cmd)
+    elif cmd == "settings":
+        settings_menu()
     else:
         sys.exit(__doc__)

@@ -33,7 +33,8 @@ Tested on GNOME (Wayland) with an NVIDIA GPU, and in CPU mode.
 | **F3** | Same as F5, with [LLM cleanup](docs/llm-cleanup.md). |
 | **F4** | [Save the last take](docs/saving-takes.md) for fine-tuning. |
 
-Wait for the "🎙 Recording…" notification before speaking.
+Wait for the "🎙 Recording…" notification before speaking. Run `./asr settings` to turn
+sounds off, change the language or edit your vocabulary.
 
 ## Quick start
 

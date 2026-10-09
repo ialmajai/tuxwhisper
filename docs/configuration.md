@@ -1,7 +1,25 @@
 # Configuration
 
-Settings are environment variables. Add them to the `[Service]` section of
-`~/.config/systemd/user/tuxwhisper.service`, e.g. `Environment=ASR_LANGUAGE=en`.
+## Settings menu
+
+Run `./asr settings`, or bind `/home/<you>/tuxwhisper/asr settings` to a key, to change
+these without editing files:
+
+- Sounds on or off, and their volume
+- Language
+- Paste key
+- LLM model for F3
+- Vocabulary and replacements lists
+
+Changes apply on the next take. The menu saves to `~/.config/tuxwhisper/config.toml`, which
+overrides the environment variables below. It needs `zenity`, which most GNOME and KDE
+distros include.
+
+## Environment variables
+
+Device, Whisper model, prompt and Ollama server are set only here; the menu's values take
+priority for the rest. Add variables to the `[Service]` section of
+`~/.config/systemd/user/tuxwhisper.service`, e.g. `Environment=ASR_DEVICE=cpu`.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -10,6 +28,7 @@ Settings are environment variables. Add them to the `[Service]` section of
 | `ASR_MODEL` | `large-v3-turbo` (GPU), `small` (CPU) | Any faster-whisper model name or path |
 | `ASR_PROMPT` | a short punctuated sentence | Style example for Whisper; keeps capitals and punctuation. Set to empty to disable. |
 | `ASR_SOUNDS` | `1` | `0` turns off the start and stop sounds |
+| `ASR_SOUND_VOLUME` | `40` | Sound volume, as a percent of the system volume |
 | `ASR_PASTE_KEY` | `shift+insert` | `shift+insert`, `ctrl+v` or `ctrl+shift+v` |
 | `ASR_REWRITE_MODEL` | `llama3.2` | Ollama model used by F3 |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama server used by F3 |
