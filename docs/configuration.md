@@ -2,8 +2,8 @@
 
 ## Settings menu
 
-Run `./asr settings`, or bind `/home/<you>/tuxwhisper/asr settings` to a key, to change
-these without editing files:
+Open "TuxWhisper Settings" from your app grid (see the Quick start), run `./asr settings`, or
+bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without editing files:
 
 - Sounds on or off, and their volume
 - Language

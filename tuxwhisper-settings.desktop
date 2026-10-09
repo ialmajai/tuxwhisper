@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=TuxWhisper Settings
+Comment=Change dictation settings, vocabulary and replacements
+Exec=@DIR@/asr settings
+Icon=audio-input-microphone
+Terminal=false
+Categories=Utility;
+Keywords=dictation;speech;voice;whisper;tuxwhisper;

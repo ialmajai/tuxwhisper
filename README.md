@@ -80,6 +80,12 @@ copied file. The first start downloads the Whisper model (about 1.5 GB) to
 Use the full path; shortcut commands don't expand `~`. KDE, Hyprland, Sway, i3: see
 [Other desktops](docs/other-desktops.md).
 
+To open the settings menu from your app grid ("TuxWhisper Settings"), install the launcher:
+
+```bash
+sed "s|@DIR@|$PWD|" tuxwhisper-settings.desktop > ~/.local/share/applications/tuxwhisper-settings.desktop
+```
+
 **5. Optional: LLM cleanup.** Install Ollama ([Linux install guide](https://docs.ollama.com/linux)) and the cleanup model:
 
 ```bash
