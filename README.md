@@ -20,7 +20,11 @@ cloud service.
 - **Tap or hold:** tap to start and stop, or hold to talk.
 - **LLM cleanup (optional):** a local [Ollama](https://ollama.com) model removes "um"s and
   fixes punctuation.
-- **Voice dataset:** save takes with their transcripts for fine-tuning.
+- **Your words, spelled right:** a custom vocabulary for names and jargon, and replacements
+  such as "new line" → line break.
+- **Settings menu:** change sounds, language, paste key and lists without editing files, and
+  re-copy any of your last 20 transcripts.
+- **Voice dataset:** save takes with their transcripts for fine-tuning, with a running count.
 - **Clipboard-safe:** TuxWhisper restores whatever you had copied.
 
 Tested on GNOME (Wayland) with an NVIDIA GPU, and in CPU mode.
@@ -32,15 +36,15 @@ Tested on GNOME (Wayland) with an NVIDIA GPU, and in CPU mode.
 | **F5** | Tap to start, tap to stop, or hold to talk. The text is pasted at your cursor. |
 | **F3** | Same as F5, with [LLM cleanup](docs/llm-cleanup.md). |
 | **F4** | [Save the last take](docs/saving-takes.md) for fine-tuning. |
+| **Alt+F9** | Open the [settings menu](docs/configuration.md#settings-menu). |
 
-Wait for the "🎙 Recording…" notification before speaking. Run `./asr settings` to turn
-sounds off, change the language or edit your vocabulary.
+Wait for the "🎙 Recording…" notification and the start sound before speaking.
 
 ## Quick start
 
 **Requirements:** Linux with systemd, Python 3.12, [uv](https://docs.astral.sh/uv/), an
 NVIDIA GPU with about 1.5 GB of free VRAM (or [CPU mode](docs/configuration.md#cpu-mode)), and `xclip`
-(or `wl-clipboard` on Wayland without XWayland).
+(or `wl-clipboard` on Wayland without XWayland). The settings menu needs `zenity`.
 
 **1. Clone and install**
 
@@ -76,11 +80,12 @@ copied file. The first start downloads the Whisper model (about 1.5 GB) to
 | F5 | `/home/<you>/tuxwhisper/asr toggle` |
 | F3 | `/home/<you>/tuxwhisper/asr rewrite` |
 | F4 | `/home/<you>/tuxwhisper/asr save` |
+| Alt+F9 | `/home/<you>/tuxwhisper/asr settings` |
 
 Use the full path; shortcut commands don't expand `~`. KDE, Hyprland, Sway, i3: see
 [Other desktops](docs/other-desktops.md).
 
-To open the settings menu from your app grid ("TuxWhisper Settings"), install the launcher:
+To also open the settings menu from your app grid ("TuxWhisper Settings"), install the launcher:
 
 ```bash
 sed "s|@DIR@|$PWD|" tuxwhisper-settings.desktop > ~/.local/share/applications/tuxwhisper-settings.desktop
@@ -102,7 +107,7 @@ Click into any text box, press F5 and speak.
 
 - [LLM cleanup (F3)](docs/llm-cleanup.md)
 - [Saving takes for fine-tuning (F4)](docs/saving-takes.md)
-- [Configuration](docs/configuration.md): language, model, custom vocabulary, replacements, CPU mode, paste key
+- [Configuration](docs/configuration.md): settings menu, custom vocabulary, replacements, CPU mode
 - [Other desktops](docs/other-desktops.md)
 - [How it works](docs/how-it-works.md)
 - [Security](docs/security.md)
