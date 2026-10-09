@@ -19,7 +19,7 @@ cloud service.
 - **Fast:** about half a second from releasing the key to text on screen, with an NVIDIA GPU.
 - **Tap or hold:** tap to start and stop, or hold to talk.
 - **LLM cleanup (optional):** a local [Ollama](https://ollama.com) model removes "um"s and
-  fixes punctuation.
+  fixes punctuation, or rewrites your dictation as an email, bullet points or your own mode.
 - **Your words, spelled right:** a custom vocabulary for names and jargon, and replacements
   such as "new line" → line break.
 - **Settings menu:** change sounds, language, paste key and lists without editing files, and

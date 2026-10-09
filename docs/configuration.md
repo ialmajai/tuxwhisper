@@ -8,8 +8,8 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
 - Sounds on or off, and their volume
 - Language
 - Paste key
-- LLM model for F3
-- Vocabulary and replacements lists
+- F3 mode (Clean up, Email, Bullet points…) and LLM model
+- Vocabulary, replacements and custom F3 modes
 - Recent transcripts: the last 20 this session; pick one to copy it again. TuxWhisper keeps
   them in `$XDG_RUNTIME_DIR`, which only you can read and which empties when you log out.
 
