@@ -323,7 +323,9 @@ class Dictation:
             t0 = time.time()
             text = llm_cleanup(text)
             print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
-        self.paste(apply_replacements(text) + " ")
+        text = apply_replacements(text)
+        add_history(text)
+        self.paste(text + " ")
 
     def save(self):
         """Write the last take as recordings/<timestamp>.wav + a row in metadata.csv
@@ -415,6 +417,29 @@ def clipboard_set(text, selection="clipboard"):
     else:
         cmd = ["wl-copy"] + (["--primary"] if selection == "primary" else [])
     subprocess.run(cmd, input=text.encode(), check=True)
+
+
+def history_path():
+    # The runtime dir is private to the user and emptied at logout, so dictated text
+    # doesn't pile up on disk.
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return os.path.join(runtime, f"{APP}-history.json") if runtime else None
+
+
+def load_history():
+    try:
+        with open(history_path()) as f:
+            return json.load(f)
+    except (TypeError, OSError, ValueError):
+        return []
+
+
+def add_history(text):
+    """Keep the last 20 pasted transcripts for the settings menu's "Recent transcripts"."""
+    if history_path():
+        items = (load_history() + [{"time": time.strftime("%H:%M"), "text": text}])[-20:]
+        with open(history_path(), "w") as f:
+            json.dump(items, f)
 
 
 def sock_path():
@@ -531,13 +556,14 @@ def settings_menu():
                 "language", "Language", (s["language"] or "auto-detect") + tag["language"],
                 "paste_key", "Paste key", s["paste_key"] + tag["paste_key"],
                 "rewrite_model", "LLM model (F3)", s["rewrite_model"] + tag["rewrite_model"],
+                "history", "Recent transcripts", f"{len(load_history())} this session",
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…"]
         choice = zenity("--list", "--title=TuxWhisper settings", "--width=440", "--height=360",
-                        "--text=Pick a setting to change. Changes apply on the next take.",
+                        "--text=Pick an item. Settings changes apply on the next take.",
                         "--column=key", "--column=Setting", "--column=Value",
                         "--hide-column=1", "--print-column=1",
-                        "--ok-label=Change", "--cancel-label=Close", *rows)
+                        "--ok-label=Select", "--cancel-label=Close", *rows)
         if not choice:
             return
         choice = choice.split("|")[0]
@@ -573,6 +599,21 @@ def settings_menu():
             picked = pick("LLM model", models, current if ":" in current else current + ":latest")
             if picked:
                 cfg["rewrite_model"] = picked
+        elif choice == "history":
+            items = load_history()[::-1]  # newest first
+            if not items:
+                zenity("--info", "--title=Recent transcripts", "--text=Nothing dictated this session yet.")
+                continue
+            rows = [x for i, h in enumerate(items)
+                    for x in (str(i), h["time"], h["text"].replace("\n", " ⏎ ")[:90])]
+            picked = zenity("--list", "--title=Recent transcripts", "--width=640", "--height=420",
+                            "--text=Pick one to copy it to the clipboard.",
+                            "--column=i", "--column=Time", "--column=Text",
+                            "--hide-column=1", "--print-column=1", "--ok-label=Copy", *rows)
+            if picked:
+                clipboard_set(items[int(picked.split("|")[0])]["text"])
+                notify("📋 Copied; paste it with Ctrl+V")
+            continue
         elif choice == "vocab":
             edit_list(VOCAB, "Vocabulary", "# Names and jargon Whisper should spell right, one per line.\n")
             continue

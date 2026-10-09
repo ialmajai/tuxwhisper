@@ -10,6 +10,8 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
 - Paste key
 - LLM model for F3
 - Vocabulary and replacements lists
+- Recent transcripts: the last 20 this session; pick one to copy it again. TuxWhisper keeps
+  them in `$XDG_RUNTIME_DIR`, which only you can read and which empties when you log out.
 
 Changes apply on the next take. The menu saves to `~/.config/tuxwhisper/config.toml`, which
 overrides the environment variables below. It needs `zenity`, which most GNOME and KDE
