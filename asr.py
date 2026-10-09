@@ -352,8 +352,10 @@ class Dictation:
             if new:
                 out.writerow(["file_name", "transcription"])
             out.writerow([name, text])
-        print(f"saved {name}", flush=True)
-        notify(f"💾 Saved {name}")
+        takes, seconds = dataset_size(meta)
+        total = f"{seconds / 60:.0f} min" if seconds >= 60 else f"{seconds:.0f} s"
+        print(f"saved {name} ({takes} takes, {total})", flush=True)
+        notify(f"💾 Saved ({takes} takes, {total})")
 
     def paste(self, text):
         # Clipboard + a paste shortcut handles any Unicode and works on X11 and Wayland.
@@ -417,6 +419,20 @@ def clipboard_set(text, selection="clipboard"):
     else:
         cmd = ["wl-copy"] + (["--primary"] if selection == "primary" else [])
     subprocess.run(cmd, input=text.encode(), check=True)
+
+
+def dataset_size(meta):
+    """Number of saved takes and their total length in seconds."""
+    takes, frames = 0, 0
+    with open(meta, newline="") as f:
+        for row in csv.DictReader(f):
+            try:
+                with wave.open(os.path.join(RECORDINGS, row["file_name"])) as w:
+                    frames += w.getnframes()
+                takes += 1
+            except (OSError, KeyError, wave.Error):  # file deleted by hand
+                pass
+    return takes, frames / RATE
 
 
 def history_path():

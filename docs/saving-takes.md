@@ -16,6 +16,8 @@ This is the Hugging Face `audiofolder` layout, ready for fine-tuning a speech mo
 > the line in `metadata.csv`: these corrected takes are the most valuable for fine-tuning,
 > especially for accented speech.
 
+- The notification shows your progress, e.g. "💾 Saved (142 takes, 14 min)". About an hour
+  of audio is a good first target for fine-tuning.
 - You can save only the **latest** take, and only once. Press F4 again and you get "Nothing
   to save" until you dictate again.
 - The saved transcript is Whisper's **raw** output, even for F3 takes, because that's what
