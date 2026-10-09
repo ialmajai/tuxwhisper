@@ -245,7 +245,7 @@ def llm_cleanup(text, lang):
             "messages": [{"role": "system",
                           "content": REWRITE_SYSTEM.replace("{task}", modes()[current_mode()]).replace(
                               "{language}", LANGUAGES.get(lang, f"the language with code {lang!r}"))},
-                         {"role": "user", "content": json.dumps({"transcript": text})}],
+                         {"role": "user", "content": json.dumps({"transcript": text}, ensure_ascii=False)}],
         })
         cleaned = json.loads(r["message"]["content"])["cleaned"].strip()
     except Exception as e:  # noqa: BLE001 - any failure falls back to the raw transcript

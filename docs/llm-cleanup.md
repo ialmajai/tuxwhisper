@@ -12,8 +12,8 @@ Pasted:   So can you explain how the attention mechanism works?
 - **Questions stay questions.** Dictate "what is a closure" and F3 pastes "What is a
   closure?" with no answer attached.
 - **Same language out:** F3 answers in the language you spoke, in every mode. `llama3.2` is
-  weak outside English (it garbles Arabic, for example); for other languages, pick a stronger
-  multilingual model under **Model for …** in the menu.
+  weak outside English (it garbles Arabic, for example). For other languages, `ollama pull
+  qwen3:8b` (about 5 GB of GPU memory) and pick it as the LLM model in the menu.
 - **Speed:** about 0.2–1 s once the model has loaded. The model unloads after 30 minutes
   idle to free GPU memory, so the next F3 takes a few seconds longer.
 - **Always pastes something:** if Ollama is unreachable, or the model doesn't fit in free
