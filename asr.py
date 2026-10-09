@@ -356,8 +356,12 @@ class Dictation:
         if len(audio) < RATE * 0.3:  # too short to be speech; Whisper hallucinates on these
             return
         t0 = time.time()
-        segments, _ = self.model.transcribe(audio, language=settings()["language"] or None, beam_size=1,
-                                            vad_filter=True, initial_prompt=PROMPT, hotwords=vocab())
+        lang = settings()["language"] or self.model.detect_language(audio, vad_filter=True)[0]
+        # The English prompt and vocabulary make Whisper translate other languages into English.
+        english = lang == "en"
+        segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=True,
+                                            initial_prompt=PROMPT if english else None,
+                                            hotwords=vocab() if english else None)
         text = " ".join(s.text.strip() for s in segments).strip()
         print(f"[{len(audio) / RATE:.1f}s audio (-{excess / RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
               flush=True)

@@ -28,7 +28,7 @@ priority for the rest. Add variables to the `[Service]` section of
 | `ASR_LANGUAGE` | auto-detect | Language code, e.g. `en`. Setting it avoids misdetection on short clips. |
 | `ASR_DEVICE` | `cuda` | `cuda` or `cpu` |
 | `ASR_MODEL` | `large-v3-turbo` (GPU), `small` (CPU) | Any faster-whisper model name or path |
-| `ASR_PROMPT` | a short punctuated sentence | Style example for Whisper; keeps capitals and punctuation. Set to empty to disable. |
+| `ASR_PROMPT` | a short punctuated sentence | Style example for Whisper; keeps capitals and punctuation. Used for English only. Set to empty to disable. |
 | `ASR_SOUNDS` | `1` | `0` turns off the start and stop sounds |
 | `ASR_SOUND_VOLUME` | `40` | Sound volume, as a percent of the system volume |
 | `ASR_PASTE_KEY` | `shift+insert` | `shift+insert`, `ctrl+v` or `ctrl+shift+v` |
@@ -56,6 +56,8 @@ Kubernetes
 ```
 
 Keep it short: long lists can make Whisper insert the words where you didn't say them.
+The vocabulary only applies to English dictation; in other languages it made Whisper
+translate or garble the text.
 
 ## Replacements
 
