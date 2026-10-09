@@ -42,7 +42,7 @@ Wait for the "🎙 Recording…" notification and the start sound before speakin
 
 ## Quick start
 
-**Requirements:** Linux with systemd, Python 3.12, [uv](https://docs.astral.sh/uv/), an
+**Requirements:** Linux with systemd, [uv](https://docs.astral.sh/uv/) (it installs Python 3.12), an
 NVIDIA GPU with about 1.5 GB of free VRAM (or [CPU mode](docs/configuration.md#cpu-mode)), and `xclip`
 (or `wl-clipboard` on Wayland without XWayland). The settings menu needs `zenity`.
 

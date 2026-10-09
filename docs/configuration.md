@@ -14,8 +14,8 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
   them in `$XDG_RUNTIME_DIR`, which only you can read and which empties when you log out.
 
 Changes apply on the next take. The menu saves to `~/.config/tuxwhisper/config.toml`, which
-overrides the environment variables below. It needs `zenity`, which most GNOME and KDE
-distros include.
+overrides the environment variables below. It needs `zenity`, which GNOME-based distros
+usually include; elsewhere, install the `zenity` package.
 
 ## Environment variables
 

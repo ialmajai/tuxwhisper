@@ -4,7 +4,7 @@ PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-# Optional settings, see README:
+# Optional settings, see docs/configuration.md:
 # Environment=ASR_LANGUAGE=en
 # Environment=OLLAMA_URL=http://localhost:11434
 # Edit this path if you cloned the repo somewhere other than ~/tuxwhisper.

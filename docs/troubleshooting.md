@@ -24,7 +24,8 @@ step 2 of the Quick start, including the file name (it must start with a number 
 <details>
 <summary><b>It doesn't paste in one app</b></summary>
 
-That app may not treat Shift+Insert as paste. Try `ASR_PASTE_KEY=ctrl+v`.
+That app may not treat Shift+Insert as paste. Set **Paste key** to `ctrl+v` in the settings
+menu.
 </details>
 
 <details>

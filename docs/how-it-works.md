@@ -25,6 +25,7 @@ The keys run small commands, which you can also use from a terminal or script:
 ./asr toggle    # start / stop dictation
 ./asr rewrite   # start / stop dictation with LLM cleanup
 ./asr save      # save the last take
+./asr settings  # open the settings menu
 ./asr serve     # run the daemon in the foreground (systemd does this at login)
 ```
 
