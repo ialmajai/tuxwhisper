@@ -1,8 +1,9 @@
 # 🐧 TuxWhisper
 
-**Offline, hotkey-driven dictation for Linux.** Press a key, speak, and your words are
-typed wherever your cursor is: a browser text box, an LLM chat prompt, your editor or
-your terminal.
+**Private, offline dictation for Linux.** Press a key, speak, and your words are typed
+wherever your cursor is: a browser text box, an LLM chat prompt, your editor or your
+terminal. Everything runs on your own machine, so your voice and your words never reach a
+cloud service.
 
 [![CI](https://github.com/ialmajai/tuxwhisper/actions/workflows/ci.yml/badge.svg)](https://github.com/ialmajai/tuxwhisper/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -10,11 +11,10 @@ your terminal.
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
 ![X11 | Wayland](https://img.shields.io/badge/display-X11%20%7C%20Wayland-555)
 
-Speech recognition runs locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper);
-your audio never leaves your machine.
-
 ## Features
 
+- **Private:** speech recognition ([faster-whisper](https://github.com/SYSTRAN/faster-whisper))
+  and the optional LLM cleanup both run locally. No account, no API key, no telemetry.
 - **Types anywhere:** browsers, editors, terminals, on X11 and Wayland (including GNOME).
 - **Fast:** about half a second from releasing the key to text on screen, with an NVIDIA GPU.
 - **Tap or hold:** tap to start and stop, or hold to talk.
