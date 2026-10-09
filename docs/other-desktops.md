@@ -7,8 +7,8 @@ Bind the same commands in your desktop's shortcut settings:
 | GNOME | Settings → Keyboard → Custom Shortcuts | ✅ Yes |
 | KDE Plasma | System Settings → Shortcuts → Add New → Command | ❔ Untested |
 | Hyprland | `binde = , F5, exec, ~/tuxwhisper/asr toggle` | ✅ Should work (`binde` repeats while held) |
-| Sway | `bindsym F5 exec ~/tuxwhisper/asr toggle` | ❌ Tap only |
-| i3 | `bindsym F5 exec --no-startup-id ~/tuxwhisper/asr toggle` | ❌ Tap only |
+| Sway | `bindsym F5 exec ~/tuxwhisper/asr toggle` | ✅ Yes (tested on Sway 1.12) |
+| i3 | `bindsym F5 exec --no-startup-id ~/tuxwhisper/asr toggle` | ✅ Yes (tested on i3 4.25) |
 
 Where holding doesn't work, tap to start and tap again to stop.
 
