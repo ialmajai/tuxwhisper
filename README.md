@@ -170,7 +170,8 @@ ollama pull llama3.2
 systemctl --user disable --now tuxwhisper
 rm -rf ~/.config/systemd/user/tuxwhisper.service ~/.config/systemd/user/tuxwhisper.service.d
 rm -f ~/.local/share/applications/tuxwhisper-settings.desktop
-sudo rm /etc/udev/rules.d/60-uinput.rules
+systemctl --user daemon-reload
+sudo rm /etc/udev/rules.d/60-uinput.rules    # takes effect after a reboot
 ```
 
 Then remove the keyboard shortcuts and delete the repo folder. The folder also holds any

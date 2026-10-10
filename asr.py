@@ -440,8 +440,8 @@ class Dictation:
             out.writerow([name, text])
         takes, seconds = dataset_size(meta)
         total = f"{seconds / 60:.0f} min" if seconds >= 60 else f"{seconds:.0f} s"
-        print(f"saved {name} ({takes} takes, {total})", flush=True)
-        notify(f"💾 Saved ({takes} takes, {total})")
+        print(f"saved {name} ({takes} recordings, {total})", flush=True)
+        notify(f"💾 Saved ({takes} recordings, {total})")
 
     def paste(self, text):
         # Clipboard + a paste shortcut handles any Unicode and works on X11 and Wayland.
@@ -701,7 +701,7 @@ def settings_menu():
                 "replacements", "Replacements", "Edit…",
                 "modes", "Custom F3 modes", "Edit…"]
         choice = zenity("--list", "--title=TuxWhisper settings", "--width=440", "--height=440",
-                        "--text=Pick an item. Settings changes apply on the next take.",
+                        "--text=Pick an item. Settings changes apply on the next recording.",
                         "--column=key", "--column=Setting", "--column=Value",
                         "--hide-column=1", "--print-column=1",
                         "--ok-label=Select", "--cancel-label=Close", *rows)

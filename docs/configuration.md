@@ -13,7 +13,7 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
 - Recent transcripts: the last 20 this session; pick one to copy it again. TuxWhisper keeps
   them in `$XDG_RUNTIME_DIR`, which only you can read and which empties when you log out.
 
-Changes apply on the next take. The menu saves to `~/.config/tuxwhisper/config.toml`, which
+Changes apply on the next recording. The menu saves to `~/.config/tuxwhisper/config.toml`, which
 overrides the environment variables below. It needs `zenity`, which GNOME-based distros
 usually include; elsewhere, install the `zenity` package.
 
@@ -47,7 +47,7 @@ settings.
 ## Custom vocabulary
 
 List names and jargon Whisper keeps misspelling in `vocab.txt` next to `asr.py`, one per
-line (`#` starts a comment). TuxWhisper re-reads the file on every take, so you don't need to restart.
+line (`#` starts a comment). TuxWhisper re-reads the file on every recording, so you don't need to restart.
 
 ```text
 TuxWhisper
@@ -73,7 +73,7 @@ tux whisper => TuxWhisper
 my email => you@example.com
 ```
 
-Like `vocab.txt`, the file is re-read on every take. Saved takes (F4) keep Whisper's original
+Like `vocab.txt`, the file is re-read on every recording. Saved recordings (F4) keep Whisper's original
 text, which matches the audio. Pick phrases you won't say for real: a `comma => ,` rule also
 fires when you mean the word.
 
