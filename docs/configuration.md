@@ -79,7 +79,10 @@ fires when you mean the word.
 
 ## CPU mode
 
-Without an NVIDIA GPU, install from `requirements.txt` and set `Environment=ASR_DEVICE=cpu`.
+Without an NVIDIA GPU, follow **No NVIDIA GPU?** under step 1 of the
+[Quick start](../README.md#1-clone-and-install): it installs `requirements.txt` and sets
+`ASR_DEVICE=cpu` in a drop-in file. To switch an existing install, run those commands, then
+`systemctl --user daemon-reload && systemctl --user restart tuxwhisper`.
 TuxWhisper then uses the smaller `small` model: a 3–4 s clip takes about 1.4 s on a recent
 desktop CPU.
 
