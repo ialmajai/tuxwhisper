@@ -28,13 +28,13 @@ jobs:
       matrix:
         include:
           - image: fedora:latest
-            deps: dnf install -y gcc kernel-headers portaudio xclip wl-clipboard tar gzip
+            deps: dnf install -y gcc kernel-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop tar gzip
           - image: archlinux:latest
-            deps: pacman -Syu --noconfirm gcc linux-api-headers portaudio xclip wl-clipboard
+            deps: pacman -Syu --noconfirm gcc linux-api-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop
           - image: debian:stable
-            deps: apt-get update && apt-get install -y curl ca-certificates gcc linux-libc-dev libportaudio2 xclip wl-clipboard
+            deps: apt-get update && apt-get install -y curl ca-certificates gcc linux-libc-dev libportaudio2 xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop
           - image: opensuse/tumbleweed
-            deps: zypper -n install curl tar gzip gawk gcc linux-glibc-devel portaudio xclip wl-clipboard
+            deps: zypper -n install curl tar gzip gawk gcc linux-glibc-devel portaudio xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop
     container: ${{ matrix.image }}
     steps:
       - run: ${{ matrix.deps }}
@@ -45,4 +45,5 @@ jobs:
           uv venv --python 3.12 .venv
           uv pip install --python .venv -r requirements.txt
           .venv/bin/python -c "import faster_whisper, numpy, sounddevice, evdev"
-          command -v xclip wl-copy
+          command -v xclip wl-copy zenity notify-send
+          test -f /usr/share/sounds/freedesktop/stereo/device-added.oga

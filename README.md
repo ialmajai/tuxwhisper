@@ -46,13 +46,29 @@ sound before speaking.
 
 ## Quick start
 
-**Requirements:**
+**Requirements:** Linux with systemd, [uv](https://docs.astral.sh/uv/) (it installs Python 3.12
+for you), and an NVIDIA GPU with about 1.5 GB of free VRAM, or
+[CPU mode](docs/configuration.md#cpu-mode).
 
-- Linux with systemd, and [uv](https://docs.astral.sh/uv/) (it installs Python 3.12 for you)
-- An NVIDIA GPU with about 1.5 GB of free VRAM, or [CPU mode](docs/configuration.md#cpu-mode)
-- `xclip`, which also works on Wayland desktops that run XWayland (GNOME and KDE do). Without
-  XWayland, use `wl-clipboard`.
-- `zenity`, for the settings menu
+### 0. Install system packages
+
+A compiler and headers to build the keyboard library, PortAudio for the microphone, clipboard
+tools, `zenity` for the settings menu, and `notify-send` plus the sound theme for the
+recording cues:
+
+```bash
+# Debian, Ubuntu
+sudo apt install gcc linux-libc-dev libportaudio2 xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop
+# Fedora
+sudo dnf install gcc kernel-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop
+# Arch
+sudo pacman -S gcc linux-api-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop
+# openSUSE
+sudo zypper install gcc linux-glibc-devel portaudio xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop
+```
+
+CI installs these lists on each distro and checks the result. Without `notify-send` or the
+sounds, TuxWhisper still records; you just don't get the cues.
 
 ### 1. Clone and install
 
