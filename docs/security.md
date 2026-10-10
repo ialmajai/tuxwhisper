@@ -10,5 +10,6 @@ The `uaccess` tag limits this to the user logged in at the active local session,
 while that session is active. Other user accounts don't get access, but every process
 running as you does, including ones started over SSH while you're logged in.
 
-If you don't want this, skip step 2: TuxWhisper still transcribes, but it can't paste the text.
+If you don't want this, skip step 2: TuxWhisper then copies each transcript instead of typing
+it, and you paste it yourself with Ctrl+V.
 To undo it later, run `sudo rm /etc/udev/rules.d/60-uinput.rules` and reboot.

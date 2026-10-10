@@ -69,7 +69,8 @@ No NVIDIA GPU? Install `requirements.txt` instead of `requirements-cuda.txt`.
 
 TuxWhisper pastes by pressing keys on a virtual keyboard, which needs this rule (and sudo,
 once). The rule lets **any program you run** send keystrokes, not only TuxWhisper; read the
-[security note](docs/security.md). To undo it, delete the file and reboot.
+[security note](docs/security.md). Skip it and TuxWhisper copies each transcript for you to
+paste with Ctrl+V instead. To undo it, delete the file and reboot.
 
 ```bash
 echo 'KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"' |

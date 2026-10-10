@@ -286,6 +286,7 @@ class Dictation:
         import numpy as np
         import sounddevice as sd
         from evdev import UInput, ecodes
+        from evdev.uinput import UInputError
         from faster_whisper import WhisperModel
 
         self.np, self.sd, self.ec = np, sd, ecodes
@@ -293,7 +294,12 @@ class Dictation:
         self.model.transcribe(np.zeros(RATE, dtype=np.float32))  # warm-up
         # Register every paste key so the menu can switch between them without a restart.
         all_keys = sorted({getattr(ecodes, k) for keys in PASTE_KEYS.values() for k in keys})
-        self.kbd = UInput({ecodes.EV_KEY: all_keys}, name=f"{APP}-keyboard")
+        try:
+            self.kbd = UInput({ecodes.EV_KEY: all_keys}, name=f"{APP}-keyboard")
+        except (UInputError, OSError) as e:  # no udev rule for /dev/uinput: copy instead of typing
+            self.kbd = None
+            print(f"virtual keyboard unavailable ({e}); transcripts go to the clipboard", flush=True)
+            notify("No virtual keyboard: transcripts are copied, paste them with Ctrl+V")
         self.lock = threading.Lock()
         self.stream = None
         self.indicator = None  # ID of the on-screen recording notification
@@ -412,6 +418,10 @@ class Dictation:
         # Clipboard + a paste shortcut handles any Unicode and works on X11 and Wayland.
         # Some apps (e.g. terminals) paste the primary selection on Shift+Insert, so set both;
         # the Ctrl shortcuts always paste the clipboard.
+        if self.kbd is None:
+            clipboard_set(text)
+            notify("📋 Copied; paste it with Ctrl+V")
+            return
         paste_key = settings()["paste_key"]
         keys = [getattr(self.ec, k) for k in PASTE_KEYS[paste_key]]
         selections = ("clipboard", "primary") if paste_key == "shift+insert" else ("clipboard",)

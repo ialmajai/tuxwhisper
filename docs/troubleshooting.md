@@ -15,10 +15,12 @@ Check `systemctl --user status tuxwhisper`. Right after login, the model may sti
 </details>
 
 <details>
-<summary><b>It transcribes but doesn't paste</b></summary>
+<summary><b>"No virtual keyboard: transcripts are copied"</b></summary>
 
-Run `getfacl /dev/uinput`; it should list `user:<you>:rw-`. If not, check the udev rule from
-step 2 of the Quick start, including the file name (it must start with a number below 73).
+TuxWhisper couldn't open `/dev/uinput`, so it copies each transcript for you to paste with
+Ctrl+V. To have it type again, run `getfacl /dev/uinput`; it should list `user:<you>:rw-`. If
+not, check the udev rule from step 2 of the Quick start, including the file name (it must
+start with a number below 73), then restart the daemon.
 </details>
 
 <details>
