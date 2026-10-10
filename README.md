@@ -19,7 +19,8 @@ reaches a cloud service, and there's nothing to pay for.
 - **Types anywhere:** browsers, editors, terminals, on X11 and Wayland (including GNOME).
 - **LLM cleanup (optional):** F3 runs your words through a local [Ollama](https://ollama.com)
   model (Meta's Llama 3.2 by default) that removes "um"s and fixes punctuation, or rewrites
-  them as an email, bullet points or your own mode.
+  them as an email, bullet points or your own mode. It needs the model to fit in GPU memory;
+  without a GPU, F3 pastes the raw transcript.
 - **Many languages:** dictate in any of Whisper's 100 languages. F3 replies in the language
   you spoke; Llama 3.2 is weak outside English, so [pick a stronger model](docs/llm-cleanup.md)
   for other languages.
@@ -155,6 +156,10 @@ Click into any text box, hold F5, wait for the start sound, speak, and release. 
 appear at the cursor. Nothing typed? See [Troubleshooting](docs/troubleshooting.md).
 
 ### 6. Optional: LLM cleanup (F3)
+
+F3 needs about 2 GB of free GPU memory for Llama 3.2, on top of Whisper's 1.5 GB. Without
+that, or in CPU mode, F3 pastes the raw transcript. You can also point `OLLAMA_URL` at another
+machine that has the memory (see [LLM cleanup](docs/llm-cleanup.md)).
 
 Install [Ollama](https://docs.ollama.com/linux) and the cleanup model. The official install
 script:
