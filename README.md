@@ -79,12 +79,27 @@ uv venv --python 3.12 .venv
 uv pip install --python .venv -r requirements-cuda.txt
 ```
 
-No NVIDIA GPU? Install `requirements.txt` instead of `requirements-cuda.txt`.
+To clone somewhere else, also edit `ExecStart` in `tuxwhisper.service` before step 3.
+
+<details>
+<summary><b>No NVIDIA GPU?</b> Use CPU mode instead</summary>
+
+Run these instead of the last line above. They install the CPU requirements and tell the
+service (set up in step 3) to use the CPU:
+
+```bash
+uv pip install --python .venv -r requirements.txt
+mkdir -p ~/.config/systemd/user/tuxwhisper.service.d
+printf '[Service]\nEnvironment=ASR_DEVICE=cpu\n' \
+  > ~/.config/systemd/user/tuxwhisper.service.d/cpu.conf
+```
+
+</details>
 
 ### 2. Allow the virtual keyboard
 
-TuxWhisper pastes by pressing keys on a virtual keyboard, which needs this rule (and sudo,
-once). The rule lets **any program you run** send keystrokes, not only TuxWhisper; read the
+TuxWhisper types by pressing keys on a virtual keyboard, which needs this rule. The rule lets
+**any program you run** send keystrokes, not only TuxWhisper; read the
 [security note](docs/security.md). Skip it and TuxWhisper copies each transcript for you to
 paste with Ctrl+V instead. To undo it, delete the file and reboot.
 
@@ -92,6 +107,7 @@ paste with Ctrl+V instead. To undo it, delete the file and reboot.
 echo 'KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"' |
   sudo tee /etc/udev/rules.d/60-uinput.rules
 sudo udevadm control --reload && sudo udevadm trigger --name-match=uinput
+getfacl /dev/uinput    # should list user:<your name>:rw-
 ```
 
 ### 3. Start the daemon at login
@@ -99,18 +115,6 @@ sudo udevadm control --reload && sudo udevadm trigger --name-match=uinput
 ```bash
 mkdir -p ~/.config/systemd/user
 cp tuxwhisper.service ~/.config/systemd/user/
-```
-
-No NVIDIA GPU? Switch the service to CPU mode before starting it:
-
-```bash
-mkdir -p ~/.config/systemd/user/tuxwhisper.service.d
-printf '[Service]\nEnvironment=ASR_DEVICE=cpu\n' > ~/.config/systemd/user/tuxwhisper.service.d/cpu.conf
-```
-
-Start it and watch it load:
-
-```bash
 systemctl --user enable --now tuxwhisper
 journalctl --user -u tuxwhisper -f    # wait for "ready", then press Ctrl+C
 ```
@@ -118,31 +122,32 @@ journalctl --user -u tuxwhisper -f    # wait for "ready", then press Ctrl+C
 The first start downloads the Whisper model to `~/.cache/huggingface` (about 1.5 GB; the CPU
 model is smaller), so it takes a while. After that, startup takes about 15 s.
 
-The service expects the repo at `~/tuxwhisper`. If it's elsewhere, edit `ExecStart` in the
-copied file and use your path in step 4.
-
 ### 4. Bind the keys
 
-On GNOME: Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts. Replace `<you>` with
-your username; shortcut commands don't expand `~`.
+On GNOME, run this in the repo folder:
 
-| Shortcut | Command |
-|---|---|
-| F5 | `/home/<you>/tuxwhisper/asr toggle` |
-| F3 | `/home/<you>/tuxwhisper/asr rewrite` |
-| F4 | `/home/<you>/tuxwhisper/asr save` |
-| Alt+F9 | `/home/<you>/tuxwhisper/asr settings` |
+```bash
+./asr bind
+```
+
+It adds F5, F3, F4 and Alt+F9 as custom shortcuts and keeps your other shortcuts. Change them
+later in Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts. KDE, Hyprland, Sway, i3:
+see [Other desktops](docs/other-desktops.md).
 
 > [!TIP]
 > Binding F5 overrides page refresh in browsers. Ctrl+R still refreshes.
 
-KDE, Hyprland, Sway, i3: see [Other desktops](docs/other-desktops.md). To also open the
-settings menu from your app grid ("TuxWhisper Settings"), run this in the repo folder:
+<details>
+<summary>Optional: open the settings menu from your app grid</summary>
+
+Run this in the repo folder to add "TuxWhisper Settings" to your app grid:
 
 ```bash
 sed "s|@DIR@|$PWD|" tuxwhisper-settings.desktop \
   > ~/.local/share/applications/tuxwhisper-settings.desktop
 ```
+
+</details>
 
 ### 5. Try it
 

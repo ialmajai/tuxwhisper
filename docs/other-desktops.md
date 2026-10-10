@@ -1,10 +1,19 @@
 # Other desktops
 
-Bind the same commands in your desktop's shortcut settings:
+Bind these commands in your desktop's shortcut settings, using the full path to your clone:
+
+| Key | Command |
+|---|---|
+| F5 | `~/tuxwhisper/asr toggle` |
+| F3 | `~/tuxwhisper/asr rewrite` |
+| F4 | `~/tuxwhisper/asr save` |
+| Alt+F9 | `~/tuxwhisper/asr settings` |
+
+Some desktops don't expand `~` in shortcut commands (GNOME's don't); write `/home/<you>/…` there.
 
 | Desktop | Binding | Hold to talk |
 |---|---|---|
-| GNOME | Settings → Keyboard → Custom Shortcuts | ✅ Yes |
+| GNOME | `./asr bind`, or Settings → Keyboard → Custom Shortcuts | ✅ Yes |
 | KDE Plasma | System Settings → Shortcuts → Add New → Command | ❔ Untested |
 | Hyprland | `binde = , F5, exec, ~/tuxwhisper/asr toggle` | ❔ Untested (`binde` repeats while held, so holding should work) |
 | Sway | `bindsym F5 exec ~/tuxwhisper/asr toggle` | ✅ Yes (tested on Sway 1.12) |

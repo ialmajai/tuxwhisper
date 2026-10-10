@@ -6,6 +6,7 @@
   asr.py rewrite  same, but clean up the transcript with a local LLM (Ollama) first
   asr.py save     save the last recording + its transcript to recordings/
   asr.py settings open the settings menu (needs zenity)
+  asr.py bind     bind F5, F3, F4 and Alt+F9 as GNOME custom shortcuts
 
 Bind `asr toggle` (and optionally `rewrite`, `save`) to keys in your desktop's shortcut settings.
 """
@@ -117,6 +118,34 @@ def settings_shortcut():
     except (FileNotFoundError, subprocess.TimeoutExpired):  # not GNOME
         pass
     return None
+
+
+GNOME_KEYS = {"toggle": "F5", "rewrite": "F3", "save": "F4", "settings": "<Alt>F9"}
+
+
+def bind_gnome():
+    """Add GNOME custom shortcuts for the asr commands, updating any that already run them."""
+    schema = "org.gnome.settings-daemon.plugins.media-keys"
+    def gs(*args):
+        return subprocess.run(["gsettings", *args], capture_output=True, text=True,
+                               check=True, timeout=5).stdout.strip()
+    try:
+        paths = re.findall(r"'([^']+)'", gs("get", schema, "custom-keybindings"))
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        sys.exit("GNOME's gsettings not found; bind the keys by hand (see docs/other-desktops.md).")
+    asr = shlex.quote(os.path.join(os.path.dirname(os.path.abspath(__file__)), "asr"))
+    for cmd, key in GNOME_KEYS.items():
+        found = [p for p in paths
+                 if gs("get", f"{schema}.custom-keybinding:{p}", "command").strip("'").endswith(f"asr {cmd}")]
+        path = found[0] if found else f"/{schema.replace('.', '/')}/custom-keybindings/tuxwhisper-{cmd}/"
+        rel = f"{schema}.custom-keybinding:{path}"
+        if not found:
+            gs("set", rel, "name", f"TuxWhisper {cmd}")
+            paths.append(path)
+        gs("set", rel, "command", f"{asr} {cmd}")
+        gs("set", rel, "binding", key)
+        print(f"{key.replace('<Alt>', 'Alt+'):7} {asr} {cmd}")
+    gs("set", schema, "custom-keybindings", str(paths))
 
 
 def sound(name):
@@ -767,5 +796,7 @@ if __name__ == "__main__":
     elif cmd == "settings":
         with_service_env()
         settings_menu()
+    elif cmd == "bind":
+        bind_gnome()
     else:
         sys.exit(__doc__)

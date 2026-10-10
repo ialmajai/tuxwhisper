@@ -26,6 +26,7 @@ The keys run small commands, which you can also use from a terminal or script:
 ./asr rewrite   # start / stop dictation with LLM cleanup
 ./asr save      # save the last take
 ./asr settings  # open the settings menu
+./asr bind      # bind F5, F3, F4 and Alt+F9 on GNOME
 ./asr serve     # run the daemon in the foreground (systemd does this at login)
 ```
 
