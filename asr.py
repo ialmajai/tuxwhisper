@@ -245,6 +245,14 @@ def rewrite_model_on_gpu():
     return False
 
 
+def warm_rewrite_model():
+    """Load the F3 model while the user speaks; llm_cleanup reports any failure."""
+    try:
+        rewrite_model_on_gpu()
+    except Exception as e:  # noqa: BLE001 - llm_cleanup retries and tells the user
+        print(f"rewrite model preload failed: {e}", flush=True)
+
+
 def modes():
     """Built-in modes plus the user's modes.txt (which can also override a built-in)."""
     found = dict(MODES)
@@ -382,6 +390,9 @@ class Dictation:
             if self.stream is None:
                 self.chunks = []
                 self.rewrite = rewrite  # mode is set by the key that started the take
+                if rewrite:  # a cold load takes seconds; overlap it with the speech
+                    self.warming = threading.Thread(target=warm_rewrite_model, daemon=True)
+                    self.warming.start()
                 sound("device-added")  # 0.2 s; over before the mic finishes opening
                 self.stream = self.sd.InputStream(
                     samplerate=RATE, channels=1, dtype="float32",
@@ -418,7 +429,17 @@ class Dictation:
         self.last_take = (audio, text)  # saved takes keep Whisper's text, matching the audio
         if self.rewrite:
             t0 = time.time()
+            # Say so only when the rewrite is slow (the model is still loading, usually).
+            busy = []
+            timer = threading.Timer(0.8, lambda: busy.append(
+                notify(f"✨ Rewriting ({current_mode()})…", persistent=True)))
+            timer.start()
+            self.warming.join()
             text = llm_cleanup(text, lang)
+            timer.cancel()
+            timer.join()
+            if busy:
+                close_notification(busy[0])
             print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
         text = apply_replacements(text)
         add_history(text)
