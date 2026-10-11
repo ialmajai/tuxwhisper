@@ -2,7 +2,7 @@
 
 ## Settings menu
 
-Open "TuxWhisper Settings" from your app grid (see the Quick start), run `./asr settings`, or
+Open "TuxWhisper Settings" from your app grid (`./install.sh` adds it), run `./asr settings`, or
 bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without editing files:
 
 - Sounds on or off, and their volume
@@ -79,9 +79,10 @@ fires when you mean the word.
 
 ## CPU mode
 
-Without an NVIDIA GPU, use the **No NVIDIA GPU (CPU mode)** block in step 1 of the
-[Quick start](../README.md#1-clone-and-install): it installs `requirements.txt` and sets
-`ASR_DEVICE=cpu` in a drop-in file. To switch an existing install, run those commands, then
+`./install.sh` sets this up when it finds no NVIDIA GPU. By hand, use the **No NVIDIA GPU (CPU
+mode)** block in step 1 of the [manual install](manual-install.md#1-clone-and-install): it
+installs `requirements.txt` and sets `ASR_DEVICE=cpu` in a drop-in file. To switch an existing
+install, run those commands, then
 `systemctl --user daemon-reload && systemctl --user restart tuxwhisper`.
 TuxWhisper then uses the smaller `small` model: a 3–4 s clip takes about 1.4 s on a recent
 desktop CPU.

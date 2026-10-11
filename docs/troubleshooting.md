@@ -19,8 +19,9 @@ Check `systemctl --user status tuxwhisper`. Right after login, the model may sti
 
 TuxWhisper couldn't open `/dev/uinput`, so it copies each transcript for you to paste with
 Ctrl+V. To have it type again, run `getfacl /dev/uinput`; it should list `user:<you>:rw-`. If
-not, check the udev rule from step 2 of the Quick start, including the file name (it must
-start with a number below 73), then restart the daemon.
+not, run `./install.sh` again and allow the virtual keyboard, or check the rule from step 2 of
+the [manual install](manual-install.md#2-allow-the-virtual-keyboard), including the file name
+(it must start with a number below 73). Then restart the daemon.
 </details>
 
 <details>

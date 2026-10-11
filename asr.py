@@ -134,17 +134,28 @@ def bind_gnome():
     except (FileNotFoundError, subprocess.CalledProcessError):
         sys.exit("GNOME's gsettings not found; bind the keys by hand (see docs/other-desktops.md).")
     asr = shlex.quote(os.path.join(os.path.dirname(os.path.abspath(__file__)), "asr"))
+    def get(path, key):
+        return gs("get", f"{schema}.custom-keybinding:{path}", key).strip("'")
     for cmd, key in GNOME_KEYS.items():
-        found = [p for p in paths
-                 if gs("get", f"{schema}.custom-keybinding:{p}", "command").strip("'").endswith(f"asr {cmd}")]
-        path = found[0] if found else f"/{schema.replace('.', '/')}/custom-keybindings/tuxwhisper-{cmd}/"
+        label = key.replace("<Alt>", "Alt+")
+        found = [p for p in paths if get(p, "command").endswith(f"asr {cmd}")]
+        if found:  # keep the key the user chose; only update the path, in case the repo moved
+            gs("set", f"{schema}.custom-keybinding:{found[0]}", "command", f"{asr} {cmd}")
+            print(f"{get(found[0], 'binding').replace('<Alt>', 'Alt+'):7} {asr} {cmd} (already bound)")
+            continue
+        taken = next((get(p, "command") for p in paths if get(p, "binding") == key), None)
+        if taken:
+            print(f"{label:7} skipped: already runs {taken}. Bind {asr} {cmd} to another key.")
+            continue
+        path = f"/{schema.replace('.', '/')}/custom-keybindings/tuxwhisper-{cmd}/"
+        while path in paths:  # never overwrite someone else's shortcut
+            path = path[:-1] + "-1/"
         rel = f"{schema}.custom-keybinding:{path}"
-        if not found:
-            gs("set", rel, "name", f"TuxWhisper {cmd}")
-            paths.append(path)
+        gs("set", rel, "name", f"TuxWhisper {cmd}")
         gs("set", rel, "command", f"{asr} {cmd}")
         gs("set", rel, "binding", key)
-        print(f"{key.replace('<Alt>', 'Alt+'):7} {asr} {cmd}")
+        paths.append(path)
+        print(f"{label:7} {asr} {cmd}")
     gs("set", schema, "custom-keybindings", str(paths))
 
 

@@ -16,10 +16,11 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libportaudio2
       - run: pip install ruff==0.16.10 -r requirements.txt
       - run: ruff check
-      - run: shellcheck asr
+      - run: shellcheck asr install.sh uninstall.sh
       - run: python -c "import faster_whisper, numpy, sounddevice, evdev"
 
-  # Follows the Quick start install on other distros; no mic or desktop, so no dictation.
+  # Runs install.sh's system-package step, then the Python install, on each distro.
+  # No mic, desktop or systemd session in a container, so no dictation.
   distros:
     name: ${{ matrix.image }}
     runs-on: ubuntu-latest
@@ -27,18 +28,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # pre: what the uv installer needs on a bare image
           - image: fedora:latest
-            deps: dnf install -y gcc kernel-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop tar gzip
+            pre: dnf install -y tar gzip
           - image: archlinux:latest
-            deps: pacman -Syu --noconfirm gcc linux-api-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop
+            pre: pacman -Syu --noconfirm
           - image: debian:stable
-            deps: apt-get update && apt-get install -y curl ca-certificates gcc linux-libc-dev libportaudio2 xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop
+            pre: apt-get update && apt-get install -y curl ca-certificates
           - image: opensuse/tumbleweed
-            deps: zypper -n install curl tar gzip gawk gcc linux-glibc-devel portaudio xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop
+            pre: zypper -n install curl tar gzip gawk
     container: ${{ matrix.image }}
     steps:
-      - run: ${{ matrix.deps }}
+      - run: ${{ matrix.pre }}
       - uses: actions/checkout@v5
+      - run: bash install.sh --packages-only --yes
       - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
       - run: |
           export PATH="$HOME/.local/bin:$PATH"

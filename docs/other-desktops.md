@@ -22,5 +22,6 @@ Some desktops don't expand `~` in shortcut commands (GNOME's don't); write `/hom
 Where holding doesn't work, tap to start and tap again to stop.
 
 The systemd service starts with `graphical-session.target`, which some window managers (i3,
-or Sway without extra setup) never start. On those, skip step 3 of the Quick start
-and start the daemon from your WM config instead, e.g. `exec ~/tuxwhisper/asr serve`.
+or Sway without extra setup) never start. On those, `./install.sh` skips the service and says
+so; by hand, skip step 3 of the [manual install](manual-install.md#3-start-the-daemon-at-login).
+Start the daemon from your WM config instead, e.g. `exec ~/tuxwhisper/asr serve`.
