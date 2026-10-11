@@ -131,6 +131,9 @@ getfacl /dev/uinput    # should list user:<your name>:rw-
 
 ### 3. Start the daemon at login
 
+On i3, or Sway without a systemd session target, skip this step and start the daemon from your
+window manager's config instead; see [Other desktops](docs/other-desktops.md).
+
 ```bash
 mkdir -p ~/.config/systemd/user
 cp tuxwhisper.service ~/.config/systemd/user/
