@@ -12,6 +12,8 @@ reaches a cloud service, and there's nothing to pay for.
 
 ![Animated re-enactment of TuxWhisper: hold F5, speak, and the sentence is typed into a chat box; hold F3 and the filler words are removed too; Alt+F9 opens the settings menu](docs/demo.gif)
 
+<sub>Re-enactment of the real key flow; the F3 result is llama3.2's actual output.</sub>
+
 ## Features
 
 - **Fast:** OpenAI's open Whisper model ([faster-whisper](https://github.com/SYSTRAN/faster-whisper))
@@ -31,7 +33,7 @@ reaches a cloud service, and there's nothing to pay for.
 TuxWhisper types by pasting, then puts back the text you had copied.
 
 Tested on GNOME (Wayland) with an NVIDIA GPU and in CPU mode, and on
-[Sway and i3](docs/other-desktops.md).
+[Sway 1.12 and i3 4.25](docs/other-desktops.md) in containers.
 
 ## Usage
 
@@ -49,7 +51,11 @@ sound before speaking.
 
 **Requirements:** Linux with systemd, [uv](https://docs.astral.sh/uv/) (it installs Python 3.12
 for you), and an NVIDIA GPU with about 1.5 GB of free VRAM, or
-[CPU mode](docs/configuration.md#cpu-mode).
+[CPU mode](docs/configuration.md#cpu-mode). No uv yet? Its official installer:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 ### 0. Install system packages
 
@@ -57,7 +63,7 @@ A compiler and headers to build the keyboard library, PortAudio for the micropho
 tools, `zenity` for the settings menu, and `notify-send` plus the sound theme for the
 recording cues:
 
-**Debian, Ubuntu:**
+**Debian (Ubuntu uses the same packages):**
 
 ```bash
 sudo apt install gcc linux-libc-dev libportaudio2 \
@@ -157,7 +163,8 @@ later in Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts. KDE,
 see [Other desktops](docs/other-desktops.md).
 
 > [!TIP]
-> Binding F5 overrides page refresh in browsers. Ctrl+R still refreshes.
+> F5 and F3 replace page refresh and find-next in browsers and many editors. Ctrl+R and Ctrl+G
+> still do those.
 
 <details>
 <summary>Optional: open the settings menu from your app grid</summary>
