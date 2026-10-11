@@ -10,9 +10,9 @@ reaches a cloud service, and there's nothing to pay for.
 ![Platform: Linux](https://img.shields.io/badge/platform-Linux-blue?logo=linux&logoColor=white)
 ![X11 | Wayland](https://img.shields.io/badge/display-X11%20%7C%20Wayland-555)
 
-![Animated re-enactment of TuxWhisper: hold F5, speak, and the sentence is typed into a chat box; hold F3 and the filler words are removed too; Alt+F9 opens the settings menu](docs/demo.gif)
+![Animated re-enactment of TuxWhisper: tap the dictation key, speak, tap again, and the sentence is typed into a chat box; the cleanup key also removes filler words; the settings key opens the settings menu](docs/demo.gif)
 
-<sub>Re-enactment of the real key flow; the F3 result is llama3.2's actual output.</sub>
+<sub>Re-enactment of the real flow; the cleaned-up sentence is llama3.2's actual output.</sub>
 
 ## Features
 
