@@ -57,15 +57,32 @@ A compiler and headers to build the keyboard library, PortAudio for the micropho
 tools, `zenity` for the settings menu, and `notify-send` plus the sound theme for the
 recording cues:
 
+**Debian, Ubuntu:**
+
 ```bash
-# Debian, Ubuntu
-sudo apt install gcc linux-libc-dev libportaudio2 xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop
-# Fedora
-sudo dnf install gcc kernel-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop
-# Arch
-sudo pacman -S gcc linux-api-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop
-# openSUSE
-sudo zypper install gcc linux-glibc-devel portaudio xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop
+sudo apt install gcc linux-libc-dev libportaudio2 \
+  xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop
+```
+
+**Fedora:**
+
+```bash
+sudo dnf install gcc kernel-headers portaudio \
+  xclip wl-clipboard zenity libnotify sound-theme-freedesktop
+```
+
+**Arch:**
+
+```bash
+sudo pacman -S gcc linux-api-headers portaudio \
+  xclip wl-clipboard zenity libnotify sound-theme-freedesktop
+```
+
+**openSUSE:**
+
+```bash
+sudo zypper install gcc linux-glibc-devel portaudio \
+  xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop
 ```
 
 CI installs these lists on each distro and checks the result. Without `notify-send` or the
