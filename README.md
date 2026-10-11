@@ -85,8 +85,8 @@ sudo zypper install gcc linux-glibc-devel portaudio \
   xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop
 ```
 
-CI installs these lists on each distro and checks the result. Without `notify-send` or the
-sounds, TuxWhisper still records; you just don't get the cues.
+CI installs these lists on Debian, Fedora, Arch and openSUSE and checks the result. Without
+`notify-send` or the sounds, TuxWhisper still records; you just don't get the cues.
 
 ### 1. Clone and install
 
