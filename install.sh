@@ -61,6 +61,8 @@ else
 fi
 [ "$PACKAGES_ONLY" = 1 ] && exit 0
 
+# uv's installer puts uv in ~/.local/bin, which a shell opened before it isn't searching yet.
+command -v uv >/dev/null || PATH="${XDG_BIN_HOME:-$HOME/.local/bin}:$PATH"
 command -v uv >/dev/null || { echo "Install uv first: https://docs.astral.sh/uv/getting-started/installation/" >&2; exit 1; }
 command -v systemctl >/dev/null || { echo "TuxWhisper needs systemd. See docs/manual-install.md." >&2; exit 1; }
 

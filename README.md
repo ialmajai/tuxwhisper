@@ -21,8 +21,8 @@ reaches a cloud service, and there's nothing to pay for.
 - **Types anywhere:** browsers, editors, terminals, on X11 and Wayland (including GNOME).
 - **LLM cleanup (optional):** F3 runs your words through a local [Ollama](https://ollama.com)
   model (Meta's Llama 3.2 by default) that removes "um"s and fixes punctuation, or rewrites
-  them as an email, bullet points or your own mode. It needs the model to fit in GPU memory;
-  without a GPU, F3 pastes the raw transcript.
+  them as an email, bullet points or your own mode. The model must fit in the GPU memory of
+  the machine running Ollama; otherwise F3 pastes the raw transcript.
 - **Many languages:** dictate in any of Whisper's 100 languages. F3 replies in the language
   you spoke; Llama 3.2 is weak outside English, so [pick a stronger model](docs/llm-cleanup.md)
   for other languages.
@@ -66,7 +66,8 @@ cd ~/tuxwhisper
 ```
 
 The installer says what each step does and asks before anything that needs your password.
-It's safe to run again. [Read it](install.sh) first if you like.
+It's safe to run again. [Read it](install.sh) first if you like. It installs system packages
+on Debian, Ubuntu, Fedora, Arch and openSUSE; on other distros, use the manual install below.
 
 **Advanced:** [Manual install](docs/manual-install.md) runs every step by hand.
 [Other desktops](docs/other-desktops.md) covers KDE, Hyprland, Sway and i3.
