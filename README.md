@@ -28,7 +28,7 @@ reaches a cloud service, and there's nothing to pay for.
 **Also:** tap or hold to talk, a custom vocabulary for names and jargon, replacements such as
 "new line" → line break, a settings menu with your last 20 transcripts, and
 [saved recordings](docs/saving-takes.md) for fine-tuning Whisper to your voice and accent.
-TuxWhisper types by pasting, then puts back whatever you had copied.
+TuxWhisper types by pasting, then puts back the text you had copied.
 
 Tested on GNOME (Wayland) with an NVIDIA GPU and in CPU mode, and on
 [Sway and i3](docs/other-desktops.md).

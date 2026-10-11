@@ -54,6 +54,10 @@ with `OLLAMA_URL`.
 <details>
 <summary><b>F3 pastes the raw transcript</b></summary>
 
-The notification says why: either Ollama isn't reachable (check `ollama list` and
-`OLLAMA_URL`), or there isn't enough free GPU memory for the cleanup model.
+- **"Not enough GPU memory for LLM cleanup":** the cleanup model doesn't fit in free GPU
+  memory, which is always the case in CPU mode. Close other GPU programs, pick a smaller model
+  in the menu, or point `OLLAMA_URL` at a machine with more memory.
+- **"LLM rewrite failed":** anything else, most often Ollama isn't running or the model isn't
+  pulled. Check `ollama list` and `OLLAMA_URL`; the exact error is in the log
+  (`journalctl --user -u tuxwhisper -n 20`).
 </details>
