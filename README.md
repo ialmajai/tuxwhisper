@@ -77,16 +77,17 @@ sounds, TuxWhisper still records; you just don't get the cues.
 git clone https://github.com/ialmajai/tuxwhisper.git ~/tuxwhisper
 cd ~/tuxwhisper
 uv venv --python 3.12 .venv
+```
+
+Then pick one. If `nvidia-smi` lists your GPU, use the first block; otherwise, the second.
+
+**NVIDIA GPU:**
+
+```bash
 uv pip install --python .venv -r requirements-cuda.txt
 ```
 
-To clone somewhere else, also edit `ExecStart` in `tuxwhisper.service` before step 3.
-
-<details>
-<summary><b>No NVIDIA GPU?</b> Use CPU mode instead</summary>
-
-Run these instead of the last line above. They install the CPU requirements and tell the
-service (set up in step 3) to use the CPU:
+**No NVIDIA GPU (CPU mode):** this also tells the service, set up in step 3, to use the CPU.
 
 ```bash
 uv pip install --python .venv -r requirements.txt
@@ -95,7 +96,7 @@ printf '[Service]\nEnvironment=ASR_DEVICE=cpu\n' \
   > ~/.config/systemd/user/tuxwhisper.service.d/cpu.conf
 ```
 
-</details>
+To clone somewhere else, also edit `ExecStart` in `tuxwhisper.service` before step 3.
 
 ### 2. Allow the virtual keyboard
 

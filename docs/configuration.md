@@ -79,7 +79,7 @@ fires when you mean the word.
 
 ## CPU mode
 
-Without an NVIDIA GPU, follow **No NVIDIA GPU?** under step 1 of the
+Without an NVIDIA GPU, use the **No NVIDIA GPU (CPU mode)** block in step 1 of the
 [Quick start](../README.md#1-clone-and-install): it installs `requirements.txt` and sets
 `ASR_DEVICE=cpu` in a drop-in file. To switch an existing install, run those commands, then
 `systemctl --user daemon-reload && systemctl --user restart tuxwhisper`.
