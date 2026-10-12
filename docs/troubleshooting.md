@@ -7,6 +7,14 @@ systemctl --user restart tuxwhisper   # restart (the model takes ~15 s to load)
 ```
 
 <details>
+<summary><b>"Your mic is clipping"</b></summary>
+
+The recording was louder than the microphone can capture, so peaks were cut off, which makes
+transcripts less accurate. TuxWhisper still pastes the text, and warns at most every 10 minutes.
+Move the mic a little further from your mouth, or lower its input volume in Settings → Sound.
+</details>
+
+<details>
 <summary><b>Nothing happens when I press the key</b></summary>
 
 Check `systemctl --user status tuxwhisper`. Right after login, the model may still be loading

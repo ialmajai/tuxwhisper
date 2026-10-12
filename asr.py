@@ -31,6 +31,8 @@ APP = "tuxwhisper"
 DEVICE = os.environ.get("ASR_DEVICE", "cuda")  # "cuda", "vulkan" (AMD/Intel GPUs) or "cpu"
 GPU_MODEL = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
 CPU_MODEL = "small"  # large models are too slow for live dictation on most CPUs
+# Clipping: samples at full scale, as when speaking too close to the mic or with the gain too high.
+CLIP_LEVEL, CLIP_SHARE, CLIP_WARN_EVERY = 0.99, 0.001, 600  # level, share of samples, seconds
 VULKAN_MODEL = "large-v3-turbo"  # whisper.cpp's name for the same model
 # Silero voice activity detection for whisper.cpp; faster-whisper ships its own copy.
 VAD_MODEL_URL = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
@@ -391,6 +393,7 @@ class Dictation:
         self.lock = threading.Lock()
         self.stream = None
         self.indicator = None  # ID of the on-screen recording notification
+        self.last_clip_warning = -CLIP_WARN_EVERY
         key = settings_shortcut()  # looked up once; shown as a hint while recording
         self.hint = f"<i>⚙ {key}</i>" if key else None  # GNOME allows only b/i/u markup
         self.chunks = []
@@ -484,6 +487,16 @@ class Dictation:
         text = apply_replacements(text)
         add_history(text)
         self.paste(text + " ")
+        self.warn_if_clipped(audio)
+
+    def warn_if_clipped(self, audio):
+        """Tell the user, after the paste, when the mic was too loud; at most every 10 minutes."""
+        clipped = float((self.np.abs(audio) >= CLIP_LEVEL).mean())
+        if clipped > CLIP_SHARE and time.monotonic() - self.last_clip_warning > CLIP_WARN_EVERY:
+            self.last_clip_warning = time.monotonic()
+            print(f"  clipping: {clipped:.2%} of samples", flush=True)
+            notify("🎙 Your mic is clipping: move back a little or lower its input volume "
+                   "in Settings → Sound")
 
     def save(self):
         """Write the last take as recordings/<timestamp>.wav + a row in metadata.csv
