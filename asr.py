@@ -98,7 +98,9 @@ def notify(msg, persistent=False, body=None):
             r = subprocess.run(["notify-send", "-a", APP, "-u", "critical", "-p",
                                 "-h", "boolean:transient:true", msg, *extra],
                                capture_output=True, text=True, timeout=2)
-            return r.stdout.strip() or None
+            nid = r.stdout.strip() or None
+            track_notification(nid, open_=True)
+            return nid
         except subprocess.TimeoutExpired:
             return None
     subprocess.Popen(["notify-send", "-a", APP, "-t", "1500",
@@ -176,7 +178,43 @@ def sound(name):
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def open_notifications_path():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return os.path.join(runtime, f"{APP}-notifications") if runtime else None
+
+
+_notifications_lock = threading.Lock()
+
+
+def track_notification(nid, open_):
+    """Remember which persistent notifications are on screen, so a daemon that died while one
+    was open can close it on its next start (GNOME keeps them, even on the lock screen)."""
+    path = open_notifications_path()
+    if not nid or not path:
+        return
+    with _notifications_lock:
+        try:
+            with open(path) as f:
+                ids = set(f.read().split())
+        except FileNotFoundError:
+            ids = set()
+        ids = ids | {nid} if open_ else ids - {nid}
+        with open(path, "w") as f:
+            f.write("\n".join(sorted(ids)))
+
+
+def close_stale_notifications():
+    path = open_notifications_path()
+    try:
+        with open(path) as f:
+            for nid in f.read().split():
+                close_notification(nid)
+    except (FileNotFoundError, TypeError):
+        pass
+
+
 def close_notification(nid):
+    track_notification(nid, open_=False)
     if nid and shutil.which("gdbus"):
         subprocess.Popen(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
                           "--object-path", "/org/freedesktop/Notifications",
@@ -646,6 +684,7 @@ def serve():
     sock = sock_path()
     if daemon_running(sock):  # don't steal the socket from a live daemon
         sys.exit(f"{APP} daemon is already running")
+    close_stale_notifications()  # left open by a daemon that crashed or restarted mid-recording
     d = Dictation()
     if os.path.exists(sock):  # stale socket from a daemon that didn't exit cleanly
         os.unlink(sock)
