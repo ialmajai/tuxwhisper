@@ -32,6 +32,8 @@ DEVICE = os.environ.get("ASR_DEVICE", "cuda")  # "cuda", "vulkan" (AMD/Intel GPU
 GPU_MODEL = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
 CPU_MODEL = "small"  # large models are too slow for live dictation on most CPUs
 VULKAN_MODEL = "large-v3-turbo"  # whisper.cpp's name for the same model
+# Silero voice activity detection for whisper.cpp; faster-whisper ships its own copy.
+VAD_MODEL_URL = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
 LANGUAGE = os.environ.get("ASR_LANGUAGE") or None  # e.g. "en"; None = auto-detect
 # Whisper imitates the style of its prompt. large-v3-turbo often drops capitals and
 # punctuation on casual speech; a punctuated prompt brings them back. Set to "" to disable.
@@ -506,20 +508,32 @@ class WhisperCpp:
     """whisper.cpp on a Vulkan GPU (AMD, Intel or NVIDIA), called like faster-whisper's model."""
 
     def __init__(self, name):
+        from pywhispercpp.constants import MODELS_DIR
         from pywhispercpp.model import Model
+        from pywhispercpp.utils import redirect_stderr
+        self.quiet = lambda: redirect_stderr(to=None)  # whisper.cpp logs every call to stderr
         self.model = Model(name, print_progress=False, print_realtime=False,
                            redirect_whispercpp_logs_to=None)
+        # Without VAD, silence comes out as "." or invented phrases, which would be pasted.
+        self.vad_model = os.path.join(MODELS_DIR, os.path.basename(VAD_MODEL_URL))
+        if not os.path.exists(self.vad_model):
+            urllib.request.urlretrieve(VAD_MODEL_URL, self.vad_model + ".part")
+            os.replace(self.vad_model + ".part", self.vad_model)
 
     def detect_language(self, audio, **_):
-        return self.model.auto_detect_language(audio)[0]
+        with self.quiet():
+            return self.model.auto_detect_language(audio)[0]
 
     def transcribe(self, audio, language=None, initial_prompt=None, hotwords=None, **_):
         # whisper.cpp has no hotwords; the vocabulary joins the prompt instead.
         prompt = " ".join(p for p in (initial_prompt, hotwords) if p)
-        params = {"language": language} if language else {}
+        params = {"vad": True, "vad_model_path": self.vad_model}
+        if language:
+            params["language"] = language
         if prompt:
             params["initial_prompt"] = prompt
-        return self.model.transcribe(audio, **params), None
+        with self.quiet():
+            return self.model.transcribe(audio, **params), None
 
 
 def load_model():

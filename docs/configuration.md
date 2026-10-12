@@ -89,7 +89,8 @@ Force it with `./install.sh --engine=vulkan`, or go back with `--engine=cpu`.
   a 7 s clip takes about 0.4 s (CUDA: 0.25 s). Integrated Intel graphics may be slower than the
   CPU; if so, use `--engine=cpu`. Reports are welcome.
 - **Vocabulary is weaker:** whisper.cpp has no hotwords, so `vocab.txt` goes into Whisper's prompt.
-- **A separate model download** (about 1.6 GB) to `~/.local/share/pywhispercpp/models`.
+- **A separate model download** (about 1.6 GB) to `~/.local/share/pywhispercpp/models`, plus
+  a 1 MB voice activity model that skips silence, so pauses don't turn into invented text.
 
 ## CPU mode
 
