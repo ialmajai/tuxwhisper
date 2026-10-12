@@ -1,0 +1,6 @@
+# For AMD and Intel GPUs (ASR_DEVICE=vulkan): whisper.cpp, built with Vulkan by install.sh:
+#   GGML_VULKAN=1 uv pip install --python .venv --no-binary pywhispercpp -r requirements-vulkan.txt
+pywhispercpp>=1.5,<2
+numpy>=1.24
+sounddevice>=0.5
+evdev>=1.6

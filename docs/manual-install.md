@@ -4,8 +4,8 @@
 yourself, use a desktop other than GNOME, or keep the repo somewhere other than `~/tuxwhisper`.
 
 **Requirements:** Linux with systemd, [uv](https://docs.astral.sh/uv/) (it installs Python 3.12
-for you), and an NVIDIA GPU with about 1.5 GB of free VRAM, or
-[CPU mode](configuration.md#cpu-mode). No uv yet? Its official installer:
+for you), and a GPU with about 1.5 GB of free memory (NVIDIA, or AMD/Intel through
+[Vulkan](configuration.md#amd-and-intel-gpus-vulkan)), or [CPU mode](configuration.md#cpu-mode). No uv yet? Its official installer:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -57,7 +57,9 @@ cd ~/tuxwhisper
 uv venv --python 3.12 .venv
 ```
 
-Then pick one. If `nvidia-smi` lists your GPU, use the first block; otherwise, the second.
+Then pick one. If `nvidia-smi` lists your GPU, use the first block. For an AMD or Intel GPU, use
+[Vulkan](configuration.md#amd-and-intel-gpus-vulkan) (easiest with `./install.sh --engine=vulkan`).
+Otherwise, the second block.
 
 **NVIDIA GPU:**
 
@@ -65,7 +67,7 @@ Then pick one. If `nvidia-smi` lists your GPU, use the first block; otherwise, t
 uv pip install --python .venv -r requirements-cuda.txt
 ```
 
-**No NVIDIA GPU (CPU mode):** this also tells the service, set up in step 3, to use the CPU.
+**No supported GPU (CPU mode):** this also tells the service, set up in step 3, to use the CPU.
 
 ```bash
 uv pip install --python .venv -r requirements.txt

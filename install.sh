@@ -3,6 +3,7 @@
 # docs/manual-install.md does the same steps by hand.
 #   --yes            answer yes to every question
 #   --packages-only  install the system packages and stop (used by CI)
+#   --engine=E       cuda (NVIDIA), vulkan (AMD/Intel GPUs) or cpu; detected when not given
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,11 +12,12 @@ UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 RULE=/etc/udev/rules.d/60-uinput.rules
 RULE_TEXT='KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"'
-YES=0 PACKAGES_ONLY=0
+YES=0 PACKAGES_ONLY=0 engine=
 for arg in "$@"; do
     case "$arg" in
         --yes) YES=1 ;;
         --packages-only) PACKAGES_ONLY=1 ;;
+        --engine=cuda|--engine=vulkan|--engine=cpu) engine=${arg#--engine=} ;;
         *) echo "Unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -27,6 +29,14 @@ ask() { local a; [ "$YES" = 1 ] && return 0; read -r -p "  $1 [Y/n] " a; [[ -z $
 
 case "$DIR" in *[\"\|\&\\]*) echo "Move the repo to a path without \" | & or \\ characters." >&2; exit 1 ;; esac
 
+# Speech engine: faster-whisper with CUDA on NVIDIA, whisper.cpp with Vulkan on AMD or Intel GPUs
+# (PCI vendors 0x1002 and 0x8086), otherwise faster-whisper on the CPU.
+if [ -z "$engine" ]; then
+    if command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then engine=cuda
+    elif grep -qsxE '0x(1002|8086)' /sys/class/drm/card*/device/vendor; then engine=vulkan
+    else engine=cpu; fi
+fi
+
 step "1/6  System packages"
 # A compiler and kernel headers build the keyboard library; PortAudio reads the microphone.
 # The rest are clipboard tools, the settings menu, notifications and the start/stop sounds.
@@ -34,16 +44,24 @@ step "1/6  System packages"
 # shellcheck source=/dev/null
 . /etc/os-release 2>/dev/null || true
 case " ${ID:-} ${ID_LIKE:-} " in
-    *" debian "*|*" ubuntu "*) pm=(apt-get install -y) pkgs=(gcc linux-libc-dev libportaudio2 xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop) ;;
-    *" fedora "*) pm=(dnf install -y) pkgs=(gcc kernel-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop) ;;
-    *" arch "*) pm=(pacman -S --needed --noconfirm) pkgs=(gcc linux-api-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop) ;;
-    *" suse "*|*" opensuse "*) pm=(zypper -n install) pkgs=(gcc linux-glibc-devel portaudio xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop) ;;
-    *) pm=() pkgs=() ;;
+    *" debian "*|*" ubuntu "*) pm=(apt-get install -y) pkgs=(gcc linux-libc-dev libportaudio2 xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop)
+        vulkan=(g++ cmake libvulkan-dev glslc spirv-headers glslang-tools mesa-vulkan-drivers) ;;
+    *" fedora "*) pm=(dnf install -y) pkgs=(gcc kernel-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop)
+        vulkan=(gcc-c++ cmake vulkan-loader-devel glslc spirv-headers-devel glslang mesa-vulkan-drivers) ;;
+    *" arch "*) pm=(pacman -S --needed --noconfirm) pkgs=(gcc linux-api-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop)
+        vulkan=(cmake vulkan-icd-loader vulkan-headers shaderc spirv-headers glslang vulkan-radeon vulkan-intel) ;;
+    *" suse "*|*" opensuse "*) pm=(zypper -n install) pkgs=(gcc linux-glibc-devel portaudio xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop)
+        vulkan=(gcc-c++ cmake vulkan-devel shaderc spirv-headers glslang-devel libvulkan_radeon libvulkan_intel) ;;
+    *) pm=() pkgs=() vulkan=() ;;
 esac
+# The Vulkan engine is compiled on install: a C++ compiler, CMake, Vulkan headers and shader tools.
+[ "$engine" = vulkan ] && pkgs+=("${vulkan[@]}")
 have_all() {
-    command -v gcc && command -v xclip && command -v wl-copy && command -v zenity && command -v notify-send &&
+    command -v gcc && { command -v xclip || command -v wl-copy; } && command -v zenity && command -v notify-send &&
         [ -f /usr/include/linux/input.h ] && [ -f /usr/share/sounds/freedesktop/stereo/device-added.oga ] &&
-        { ldconfig -p 2>/dev/null || /sbin/ldconfig -p; } | grep -q libportaudio
+        { ldconfig -p 2>/dev/null || /sbin/ldconfig -p; } | grep libportaudio >/dev/null &&
+        { [ "$engine" != vulkan ] || { command -v g++ && command -v cmake && command -v glslc &&
+            command -v glslangValidator && [ -f /usr/include/vulkan/vulkan.h ]; }; }
 } >/dev/null 2>&1
 if have_all; then
     note "Already installed."
@@ -67,13 +85,16 @@ command -v uv >/dev/null || { echo "Install uv first: https://docs.astral.sh/uv/
 command -v systemctl >/dev/null || { echo "TuxWhisper needs systemd. See docs/manual-install.md." >&2; exit 1; }
 
 step "2/6  Python packages"
-if command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1; then
-    gpu=1; reqs=requirements-cuda.txt; note "NVIDIA GPU found: installing the GPU build."
-else
-    gpu=0; reqs=requirements.txt; note "No NVIDIA GPU found: installing the CPU build (slower)."
-fi
 [ -d .venv ] || uv venv -q --python 3.12 .venv
-uv pip install -q --python .venv -r "$reqs"
+case "$engine" in
+    cuda) note "NVIDIA GPU: installing the CUDA build."
+        uv pip install -q --python .venv -r requirements-cuda.txt ;;
+    vulkan) note "AMD or Intel GPU: building whisper.cpp with Vulkan (a few minutes)."
+        note "Untested on AMD and Intel so far; if it's slow, run ./install.sh --engine=cpu."
+        GGML_VULKAN=1 uv pip install -q --python .venv --no-binary pywhispercpp -r requirements-vulkan.txt ;;
+    cpu) note "No supported GPU: installing the CPU build (slower)."
+        uv pip install -q --python .venv -r requirements.txt ;;
+esac
 
 step "3/6  Virtual keyboard (lets TuxWhisper type for you)"
 if [ -f "$RULE" ] && grep -qF "$RULE_TEXT" "$RULE"; then
@@ -107,10 +128,12 @@ else
         sed "s|^ExecStart=.*|ExecStart=\"$DIR/asr\" serve|" tuxwhisper.service > "$UNIT_DIR/tuxwhisper.service"
         note "Installed $UNIT_DIR/tuxwhisper.service."
     fi
-    if [ "$gpu" = 0 ]; then
+    # One drop-in file names the engine; NVIDIA needs none (cuda is the default).
+    rm -f "$UNIT_DIR/tuxwhisper.service.d/cpu.conf" "$UNIT_DIR/tuxwhisper.service.d/vulkan.conf"
+    if [ "$engine" != cuda ]; then
         mkdir -p "$UNIT_DIR/tuxwhisper.service.d"
-        printf '[Service]\nEnvironment=ASR_DEVICE=cpu\n' > "$UNIT_DIR/tuxwhisper.service.d/cpu.conf"
-        note "Set CPU mode."
+        printf '[Service]\nEnvironment=ASR_DEVICE=%s\n' "$engine" > "$UNIT_DIR/tuxwhisper.service.d/$engine.conf"
+        note "Set ASR_DEVICE=$engine."
     fi
     systemctl --user daemon-reload
     systemctl --user enable -q tuxwhisper

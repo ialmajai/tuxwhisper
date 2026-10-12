@@ -26,7 +26,7 @@ priority for the rest. Add variables to the `[Service]` section of
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `ASR_LANGUAGE` | auto-detect | Language code, e.g. `en`. Setting it avoids misdetection on short clips. |
-| `ASR_DEVICE` | `cuda` | `cuda` or `cpu` |
+| `ASR_DEVICE` | `cuda` | `cuda` (NVIDIA), `vulkan` (AMD/Intel GPUs) or `cpu` |
 | `ASR_MODEL` | `large-v3-turbo` (GPU), `small` (CPU) | Any faster-whisper model name or path |
 | `ASR_PROMPT` | a short punctuated sentence | Style example for Whisper; keeps capitals and punctuation. Used for English only. Set to empty to disable. |
 | `ASR_SOUNDS` | `1` | `0` turns off the start and stop sounds |
@@ -77,9 +77,23 @@ Like `vocab.txt`, the file is re-read on every recording. Saved recordings (F4) 
 text, which matches the audio. Pick phrases you won't say for real: a `comma => ,` rule also
 fires when you mean the word.
 
+## AMD and Intel GPUs (Vulkan)
+
+On AMD and Intel GPUs, TuxWhisper runs Whisper through [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+and Vulkan instead of faster-whisper and CUDA. `./install.sh` picks this when it finds an AMD or
+Intel GPU and no NVIDIA one. It compiles whisper.cpp on install, which takes a few minutes and needs
+a C++ compiler, CMake, the Vulkan headers and shader tools; the installer adds those packages.
+Force it with `./install.sh --engine=vulkan`, or go back with `--engine=cpu`.
+
+- **Untested on AMD and Intel hardware.** It's tested through Vulkan on an NVIDIA RTX 3080, where
+  a 7 s clip takes about 0.4 s (CUDA: 0.25 s). Integrated Intel graphics may be slower than the
+  CPU; if so, use `--engine=cpu`. Reports are welcome.
+- **Vocabulary is weaker:** whisper.cpp has no hotwords, so `vocab.txt` goes into Whisper's prompt.
+- **A separate model download** (about 1.6 GB) to `~/.local/share/pywhispercpp/models`.
+
 ## CPU mode
 
-`./install.sh` sets this up when it finds no NVIDIA GPU. By hand, use the **No NVIDIA GPU (CPU
+`./install.sh` sets this up when it finds no supported GPU. By hand, use the **No NVIDIA GPU (CPU
 mode)** block in step 1 of the [manual install](manual-install.md#1-clone-and-install): it
 installs `requirements.txt` and sets `ASR_DEVICE=cpu` in a drop-in file. To switch an existing
 install, run those commands, then

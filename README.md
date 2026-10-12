@@ -17,7 +17,8 @@ reaches a cloud service, and there's nothing to pay for.
 ## Features
 
 - **Fast:** OpenAI's open Whisper model ([faster-whisper](https://github.com/SYSTRAN/faster-whisper))
-  types your words about half a second after you release the key, with an NVIDIA GPU.
+  types your words about half a second after you release the key, with an NVIDIA GPU. AMD
+  and Intel GPUs work through Vulkan.
 - **Types anywhere:** browsers, editors, terminals, on X11 and Wayland (including GNOME).
 - **LLM cleanup (optional):** F3 runs your words through a local [Ollama](https://ollama.com)
   model (Meta's Llama 3.2 by default) that removes "um"s and fixes punctuation, or rewrites
@@ -49,8 +50,9 @@ sound before speaking.
 
 ## Install
 
-You need Linux with systemd, [uv](https://docs.astral.sh/uv/), and an NVIDIA GPU with about
-1.5 GB of free GPU memory. No NVIDIA GPU? TuxWhisper runs on the CPU too, more slowly.
+You need Linux with systemd, [uv](https://docs.astral.sh/uv/), and a GPU with about 1.5 GB of
+free memory: NVIDIA (CUDA), or AMD or Intel ([Vulkan](docs/configuration.md#amd-and-intel-gpus-vulkan),
+not yet tested on those). No GPU? TuxWhisper runs on the CPU too, more slowly.
 No uv yet? Its official installer:
 
 ```bash
@@ -100,7 +102,7 @@ downloaded models, listing where they are.
 - [Manual install](docs/manual-install.md)
 - [LLM cleanup (F3)](docs/llm-cleanup.md)
 - [Saving recordings for fine-tuning (F4)](docs/saving-takes.md)
-- [Configuration](docs/configuration.md): settings menu, custom vocabulary, replacements, CPU mode
+- [Configuration](docs/configuration.md): settings menu, custom vocabulary, replacements, GPU and CPU modes
 - [Other desktops](docs/other-desktops.md)
 - [How it works](docs/how-it-works.md)
 - [Security](docs/security.md)

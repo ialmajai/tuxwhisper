@@ -28,9 +28,10 @@ import urllib.request
 import wave
 
 APP = "tuxwhisper"
-DEVICE = os.environ.get("ASR_DEVICE", "cuda")  # "cuda" or "cpu"
+DEVICE = os.environ.get("ASR_DEVICE", "cuda")  # "cuda", "vulkan" (AMD/Intel GPUs) or "cpu"
 GPU_MODEL = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
 CPU_MODEL = "small"  # large models are too slow for live dictation on most CPUs
+VULKAN_MODEL = "large-v3-turbo"  # whisper.cpp's name for the same model
 LANGUAGE = os.environ.get("ASR_LANGUAGE") or None  # e.g. "en"; None = auto-detect
 # Whisper imitates the style of its prompt. large-v3-turbo often drops capitals and
 # punctuation on casual speech; a punctuated prompt brings them back. Set to "" to disable.
@@ -335,10 +336,9 @@ class Dictation:
         import sounddevice as sd
         from evdev import UInput, ecodes
         from evdev.uinput import UInputError
-        from faster_whisper import WhisperModel
 
         self.np, self.sd, self.ec = np, sd, ecodes
-        self.model = load_model(WhisperModel)
+        self.model = load_model()
         self.model.transcribe(np.zeros(RATE, dtype=np.float32))  # warm-up
         # Register every paste key so the menu can switch between them without a restart.
         all_keys = sorted({getattr(ecodes, k) for keys in PASTE_KEYS.values() for k in keys})
@@ -502,8 +502,37 @@ class Dictation:
                 clipboard_set(old, sel)
 
 
-def load_model(WhisperModel):
-    """Whisper on the GPU (default), or on the CPU with ASR_DEVICE=cpu (int8, smaller model)."""
+class WhisperCpp:
+    """whisper.cpp on a Vulkan GPU (AMD, Intel or NVIDIA), called like faster-whisper's model."""
+
+    def __init__(self, name):
+        from pywhispercpp.model import Model
+        self.model = Model(name, print_progress=False, print_realtime=False,
+                           redirect_whispercpp_logs_to=None)
+
+    def detect_language(self, audio, **_):
+        return self.model.auto_detect_language(audio)[0]
+
+    def transcribe(self, audio, language=None, initial_prompt=None, hotwords=None, **_):
+        # whisper.cpp has no hotwords; the vocabulary joins the prompt instead.
+        prompt = " ".join(p for p in (initial_prompt, hotwords) if p)
+        params = {"language": language} if language else {}
+        if prompt:
+            params["initial_prompt"] = prompt
+        return self.model.transcribe(audio, **params), None
+
+
+def load_model():
+    """Whisper on an NVIDIA GPU (default), on another GPU with ASR_DEVICE=vulkan, or on the CPU
+    with ASR_DEVICE=cpu (int8, smaller model)."""
+    if DEVICE == "vulkan":
+        model = os.environ.get("ASR_MODEL", VULKAN_MODEL)
+        print(f"loading {model} on vulkan (whisper.cpp) ...", flush=True)
+        try:
+            return WhisperCpp(model)
+        except ImportError as e:
+            sys.exit(f"pywhispercpp missing ({e}); run ./install.sh again")
+    from faster_whisper import WhisperModel
     on_cpu = DEVICE == "cpu"
     model = os.environ.get("ASR_MODEL", CPU_MODEL if on_cpu else GPU_MODEL)
     print(f"loading {model} on {DEVICE} ...", flush=True)

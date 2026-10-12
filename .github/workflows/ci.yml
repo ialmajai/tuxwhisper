@@ -50,3 +50,20 @@ jobs:
           .venv/bin/python -c "import faster_whisper, numpy, sounddevice, evdev"
           command -v xclip wl-copy zenity notify-send
           test -f /usr/share/sounds/freedesktop/stereo/device-added.oga
+
+  # Builds whisper.cpp with Vulkan the way install.sh does for AMD and Intel GPUs. No GPU here,
+  # so this checks the packages and the build, not transcription.
+  vulkan:
+    runs-on: ubuntu-latest
+    container: debian:stable
+    steps:
+      - run: apt-get update && apt-get install -y curl ca-certificates
+      - uses: actions/checkout@v5
+      - run: bash install.sh --packages-only --yes --engine=vulkan
+      - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
+      - run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv venv --python 3.12 .venv
+          GGML_VULKAN=1 uv pip install --python .venv --no-binary pywhispercpp -r requirements-vulkan.txt
+          ls .venv/lib/python3.12/site-packages/libggml-vulkan.so
+          LD_LIBRARY_PATH=.venv/lib/python3.12/site-packages .venv/bin/python -c "from pywhispercpp.model import Model"
