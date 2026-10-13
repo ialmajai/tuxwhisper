@@ -971,29 +971,95 @@ def save_settings(s):
                      for k, v in s.items())
 
 
+def pending_model_path():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return os.path.join(runtime, f"{APP}-pending-model") if runtime else None
+
+
+def pending_model():
+    """The speech model being downloaded to switch to, if any."""
+    try:
+        with open(pending_model_path()) as f:
+            return f.read().strip() or None
+    except (FileNotFoundError, TypeError):
+        return None
+
+
+def set_pending_model(name):
+    path = pending_model_path()
+    if path:
+        with open(path, "w") as f:
+            f.write(name or "")
+
+
+def switch_asr_model(name):
+    """Save the speech model and restart the daemon with it (about 15 s); True if it restarted."""
+    cfg = read_config()
+    cfg["asr_model"] = name
+    save_settings(cfg)
+    if subprocess.run(["systemctl", "--user", "is-active", "-q", APP]).returncode:
+        return False
+    subprocess.run(["systemctl", "--user", "restart", APP])
+    return True
+
+
+def download_asr_model(name):
+    """`tuxwhisper download`: fetch a speech model while the daemon keeps dictating with the
+    current one, then switch to it, unless another model was picked in the meantime."""
+    size = next((m[2] for m in ASR_MODELS if m[0] == name), "")
+    nid = notify(f"⏳ Downloading the speech model {name}" + (f" ({size})" if size else "") + "…",
+                 persistent=True, body="<i>Keep dictating; TuxWhisper switches when it's done</i>")
+    try:
+        if DEVICE == "vulkan":
+            from pywhispercpp.utils import download_model
+            if not download_model(name):
+                raise ValueError(f"unknown model {name}")
+        else:
+            from faster_whisper.utils import download_model
+            download_model(name)
+    except Exception as e:  # noqa: BLE001 - any failure: say so and keep the current model
+        close_notification(nid)
+        if pending_model() == name:
+            set_pending_model(None)
+        notify(f"Couldn't download the speech model {name}; still using the current one.")
+        sys.exit(f"download of {name} failed: {e}")
+    close_notification(nid)
+    if pending_model() != name:  # the user switched to another model while this downloaded
+        return
+    set_pending_model(None)
+    if switch_asr_model(name):
+        notify(f"✅ Downloaded {name}; switching to it now (about 15 seconds)")
+    else:
+        notify(f"✅ Downloaded {name}; it's used from the next start of TuxWhisper")
+
+
 def pick_asr_model(current):
-    """Choose the speech model; the daemon restarts and downloads it on first use."""
+    """Choose the speech model. A downloaded one is used at once; a new one downloads in the
+    background while dictation carries on with the current model."""
     current = current or default_asr_model().split("-whisper-")[-1]
-    labels = {f"{n} ({size}{', downloaded' if model_downloaded(n) else ''}): {about}": n
-              for n, about, size in asr_models()}
+    pending = pending_model()
+    def state(n):
+        return ", downloading" if n == pending else ", downloaded" if model_downloaded(n) else ""
+    labels = {f"{n} ({size}{state(n)}): {about}": n for n, about, size in asr_models()}
     picked = zenity("--list", "--title=Speech model", "--width=640", "--height=360",
                     "--text=The model that turns your speech into text. Bigger is more accurate but slower.",
                     "--column=Current", "--column=Model", "--print-column=2",
                     *[x for label, n in labels.items() for x in ("✓" if n == current else "", label)])
-    if not picked or labels[picked] == current:
+    if not picked or labels[picked] in (current, pending):
         return
     name = labels[picked]
-    cfg = read_config()
-    cfg["asr_model"] = name
-    save_settings(cfg)
-    running = subprocess.run(["systemctl", "--user", "is-active", "-q", APP]).returncode == 0
-    if running:
-        subprocess.run(["systemctl", "--user", "restart", APP])
+    if model_downloaded(name):
+        set_pending_model(None)  # a download in progress finishes, but won't switch away from this
+        restarted = switch_asr_model(name)
         zenity("--info", "--title=Speech model", f"--text=Switching to {name}. "
-               + ("A notification shows when it's ready." if not model_downloaded(name)
-                  else "Dictation is back in about 15 seconds."))
-    else:
-        zenity("--info", "--title=Speech model", f"--text={name} is used from the next start of TuxWhisper.")
+               + ("Dictation is back in about 15 seconds." if restarted
+                  else "It's used from the next start of TuxWhisper."))
+        return
+    set_pending_model(name)
+    subprocess.Popen([sys.executable, "-m", APP, "download", name], start_new_session=True,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    zenity("--info", "--title=Speech model", f"--text=Downloading {name} in the background. Keep "
+           f"dictating with {current}; TuxWhisper switches to {name} when the download is done.")
 
 
 def keys_summary():
@@ -1178,6 +1244,8 @@ def main():
         settings_menu()
     elif cmd == "bind":
         bind_gnome()
+    elif cmd == "download" and len(sys.argv) > 2:
+        download_asr_model(sys.argv[2])
     elif cmd == "setup":
         run_script("install.sh", sys.argv[2:])
     elif cmd == "uninstall":
