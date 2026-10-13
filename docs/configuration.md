@@ -2,7 +2,7 @@
 
 ## Settings menu
 
-Open "TuxWhisper Settings" from your app grid (`./install.sh` adds it), run `./asr settings`, or
+Open "TuxWhisper Settings" from your app grid (`./install.sh` adds it), run `tuxwhisper settings` (`./asr settings` in a git clone), or
 bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without editing files:
 
 - Sounds on or off, and their volume
@@ -46,7 +46,7 @@ settings.
 
 ## Custom vocabulary
 
-List names and jargon Whisper keeps misspelling in `vocab.txt` next to `asr.py`, one per
+List names and jargon Whisper keeps misspelling in `~/.config/tuxwhisper/vocab.txt`, one per
 line (`#` starts a comment). TuxWhisper re-reads the file on every recording, so you don't need to restart.
 
 ```text
@@ -61,7 +61,7 @@ translate or garble the text.
 
 ## Replacements
 
-List fixed rewrites in `replacements.txt` next to `asr.py`, one `spoken => written` rule per
+List fixed rewrites in `~/.config/tuxwhisper/replacements.txt`, one `spoken => written` rule per
 line. TuxWhisper applies them to the text before pasting, on F5 and F3, matching whole words
 in any case. `\n` inserts a line break, and a line-break rule also removes the punctuation
 Whisper puts around it.
@@ -96,7 +96,7 @@ Force it with `./install.sh --engine=vulkan`, or go back with `--engine=cpu`.
 
 `./install.sh` sets this up when it finds no supported GPU. By hand, use the **No NVIDIA GPU (CPU
 mode)** block in step 1 of the [manual install](manual-install.md#1-clone-and-install): it
-installs `requirements.txt` and sets `ASR_DEVICE=cpu` in a drop-in file. To switch an existing
+installs the CPU build and sets `ASR_DEVICE=cpu` in a drop-in file. To switch an existing
 install, run those commands, then
 `systemctl --user daemon-reload && systemctl --user restart tuxwhisper`.
 TuxWhisper then uses the smaller `small` model: a 3–4 s clip takes about 1.4 s on a recent

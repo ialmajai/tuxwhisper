@@ -1,14 +1,15 @@
-#!/usr/bin/env python3
 """Push-to-toggle local dictation for Linux (X11 and Wayland).
 
-  asr.py serve    run the daemon (loads the model once and keeps it in memory)
-  asr.py toggle   start recording / stop, transcribe and paste at the cursor
-  asr.py rewrite  same, but clean up the transcript with a local LLM (Ollama) first
-  asr.py save     save the last recording + its transcript to recordings/
-  asr.py settings open the settings menu (needs zenity)
-  asr.py bind     bind F5, F3, F4 and Alt+F9 as GNOME custom shortcuts
+  tuxwhisper setup      install the system packages, background service and GNOME shortcuts
+  tuxwhisper serve      run the daemon (loads the model once and keeps it in memory)
+  tuxwhisper toggle     start recording / stop, transcribe and paste at the cursor
+  tuxwhisper rewrite    same, but clean up the transcript with a local LLM (Ollama) first
+  tuxwhisper save       save the last recording + its transcript for fine-tuning
+  tuxwhisper settings   open the settings menu (needs zenity)
+  tuxwhisper bind       bind F5, F3, F4 and Alt+F9 as GNOME custom shortcuts
+  tuxwhisper uninstall  remove the service, shortcuts and launcher that setup added
 
-Bind `asr toggle` (and optionally `rewrite`, `save`) to keys in your desktop's shortcut settings.
+From a git clone, `./asr` runs the same commands.
 """
 import csv
 import datetime
@@ -51,15 +52,18 @@ SOUND_VOLUME = int(os.environ.get("ASR_SOUND_VOLUME", "40"))
 PASTE_KEYS = {"shift+insert": ["KEY_LEFTSHIFT", "KEY_INSERT"],
               "ctrl+v": ["KEY_LEFTCTRL", "KEY_V"],
               "ctrl+shift+v": ["KEY_LEFTCTRL", "KEY_LEFTSHIFT", "KEY_V"]}
+CONFIG_DIR = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), APP)
+DATA_DIR = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), APP)
 # The settings menu writes here; its values override the environment variables above.
-CONFIG = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
-                      APP, "config.toml")
+CONFIG = os.path.join(CONFIG_DIR, "config.toml")
 RATE = 16000
-RECORDINGS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "recordings")
+RECORDINGS = os.path.join(DATA_DIR, "recordings")
 # Names and jargon Whisper should spell right, one per line; re-read on every take.
-VOCAB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab.txt")
+VOCAB = os.path.join(CONFIG_DIR, "vocab.txt")
 # "spoken words => text" rules applied before pasting; re-read on every take.
-REPLACEMENTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "replacements.txt")
+REPLACEMENTS = os.path.join(CONFIG_DIR, "replacements.txt")
+# Before 0.2 these lived in the git clone, next to asr.py.
+OLD_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def read_config():
@@ -119,7 +123,7 @@ def settings_shortcut():
     schema = "org.gnome.settings-daemon.plugins.media-keys"
     try:
         for path in re.findall(r"'([^']+)'", get(schema, "custom-keybindings")):
-            if get(f"{schema}.custom-keybinding:{path}", "command").endswith("asr settings"):
+            if get(f"{schema}.custom-keybinding:{path}", "command").endswith(("asr settings", f"{APP} settings")):
                 binding = get(f"{schema}.custom-keybinding:{path}", "binding")
                 return re.sub(r"<(\w+)>", r"\1+", binding).replace("Primary", "Ctrl") or None
     except (FileNotFoundError, subprocess.TimeoutExpired):  # not GNOME
@@ -140,12 +144,12 @@ def bind_gnome():
         paths = re.findall(r"'([^']+)'", gs("get", schema, "custom-keybindings"))
     except (FileNotFoundError, subprocess.CalledProcessError):
         sys.exit("GNOME's gsettings not found; bind the keys by hand (see docs/other-desktops.md).")
-    asr = shlex.quote(os.path.join(os.path.dirname(os.path.abspath(__file__)), "asr"))
+    asr = shlex.quote(command_path())
     def get(path, key):
         return gs("get", f"{schema}.custom-keybinding:{path}", key).strip("'")
     for cmd, key in GNOME_KEYS.items():
         label = key.replace("<Alt>", "Alt+")
-        found = [p for p in paths if get(p, "command").endswith(f"asr {cmd}")]
+        found = [p for p in paths if get(p, "command").endswith((f"asr {cmd}", f"{APP} {cmd}"))]
         if found:  # keep the key the user chose; only update the path, in case the repo moved
             gs("set", f"{schema}.custom-keybinding:{found[0]}", "command", f"{asr} {cmd}")
             print(f"{get(found[0], 'binding').replace('<Alt>', 'Alt+'):7} {asr} {cmd} (already bound)")
@@ -248,7 +252,7 @@ MODES = {
                      "starting with '- ', no brackets or headings. Keep every fact and add none; "
                      "a question stays a question.",
 }
-MODES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "modes.txt")
+MODES_FILE = os.path.join(CONFIG_DIR, "modes.txt")
 
 
 # num_ctx: dictations are short. num_gpu: all layers on the GPU, so a full GPU fails fast with
@@ -759,6 +763,7 @@ def zenity(*args):
 
 def edit_list(path, title, help_text):
     """Edit a vocab/replacements file in a dialog; the file keeps its comments."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
         with open(path, "w") as f:
             f.write(help_text)
@@ -788,7 +793,7 @@ def with_service_env():
         return
     env = dict(os.environ, TUXWHISPER_SERVICE_ENV="1")
     env.update(item.split("=", 1) for item in shlex.split(r.stdout) if "=" in item)
-    os.execve(sys.executable, [sys.executable, os.path.abspath(__file__), "settings"], env)
+    os.execve(sys.executable, [sys.executable, "-m", APP, "settings"], env)
 
 
 def toml_value(v):
@@ -803,7 +808,7 @@ def save_settings(s):
     """Write only the given settings, so unchanged ones keep following the environment."""
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
     with open(CONFIG, "w") as f:
-        f.write("# Written by `asr settings`; overrides the ASR_* environment variables.\n")
+        f.write("# Written by the settings menu; overrides the ASR_* environment variables.\n")
         f.writelines(f"{k} = {toml_value(v)}\n"
                      for k, v in s.items())
 
@@ -914,9 +919,56 @@ def settings_menu():
         save_settings(cfg)
 
 
-if __name__ == "__main__":
+def command_path():
+    """How shortcuts, the service and the launcher run TuxWhisper: ./asr in a git clone (the
+    wrapper sets TUXWHISPER_CMD), else the `tuxwhisper` command that pip or uv installed."""
+    return os.environ.get("TUXWHISPER_CMD") or shutil.which(APP) or os.path.join(OLD_REPO, "asr")
+
+
+def migrate_old_files():
+    """Move lists and recordings from a pre-0.2 git clone to the standard folders, once."""
+    moves = [(os.path.join(OLD_REPO, name), os.path.join(CONFIG_DIR, name))
+             for name in ("vocab.txt", "replacements.txt", "modes.txt")]
+    moves.append((os.path.join(OLD_REPO, "recordings"), RECORDINGS))
+    for old, new in moves:
+        if os.path.exists(old) and not os.path.exists(new):
+            os.makedirs(os.path.dirname(new), exist_ok=True)
+            shutil.move(old, new)
+            print(f"moved {old} to {new}", flush=True)
+
+
+def add_library_path():
+    """pip installs the CUDA and whisper.cpp libraries inside site-packages, where the dynamic
+    loader doesn't look. It reads LD_LIBRARY_PATH only at startup, so restart with it set."""
+    import sysconfig
+    site = sysconfig.get_paths()["purelib"]
+    wanted = [d for d in (f"{site}/nvidia/cudnn/lib", f"{site}/nvidia/cublas/lib") if os.path.isdir(d)]
+    if os.path.exists(f"{site}/libwhisper.so.1"):
+        wanted.append(site)
+    current = [p for p in os.environ.get("LD_LIBRARY_PATH", "").split(":") if p]
+    missing = [d for d in wanted if d not in current]
+    if missing and not os.environ.get("TUXWHISPER_LIBS_SET"):
+        env = dict(os.environ, TUXWHISPER_LIBS_SET="1", LD_LIBRARY_PATH=":".join(missing + current))
+        os.execve(sys.executable, [sys.executable, "-m", APP, *sys.argv[1:]], env)
+
+
+def run_script(name, args):
+    """Run install.sh or uninstall.sh: shipped inside the package, or at the top of a git clone."""
+    packaged = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", name)
+    script = packaged if os.path.exists(packaged) else os.path.join(OLD_REPO, name)
+    env = dict(os.environ, TUXWHISPER_CMD=command_path(), TUXWHISPER_PY=sys.executable)
+    if os.path.exists(packaged):
+        from tuxwhisper import __version__
+        env.update(TUXWHISPER_PACKAGED="1", TUXWHISPER_VERSION=__version__)
+    sys.exit(subprocess.call(["bash", script, *args], env=env))
+
+
+def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+    if cmd in ("serve", "settings"):
+        migrate_old_files()
     if cmd == "serve":
+        add_library_path()
         serve()
     elif cmd in ("toggle", "rewrite", "save"):
         send(cmd)
@@ -925,5 +977,13 @@ if __name__ == "__main__":
         settings_menu()
     elif cmd == "bind":
         bind_gnome()
+    elif cmd == "setup":
+        run_script("install.sh", sys.argv[2:])
+    elif cmd == "uninstall":
+        run_script("uninstall.sh", sys.argv[2:])
     else:
         sys.exit(__doc__)
+
+
+if __name__ == "__main__":
+    main()

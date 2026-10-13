@@ -64,13 +64,13 @@ Otherwise, the second block.
 **NVIDIA GPU:**
 
 ```bash
-uv pip install --python .venv -r requirements-cuda.txt
+uv pip install --python .venv -e '.[cuda]'
 ```
 
 **No supported GPU (CPU mode):** this also tells the service, set up in step 3, to use the CPU.
 
 ```bash
-uv pip install --python .venv -r requirements.txt
+uv pip install --python .venv -e .
 mkdir -p ~/.config/systemd/user/tuxwhisper.service.d
 printf '[Service]\nEnvironment=ASR_DEVICE=cpu\n' \
   > ~/.config/systemd/user/tuxwhisper.service.d/cpu.conf
@@ -152,6 +152,6 @@ systemctl --user daemon-reload
 sudo rm /etc/udev/rules.d/60-uinput.rules    # takes effect after a reboot
 ```
 
-Then remove the keyboard shortcuts and delete the repo folder. The folder also holds any
-recordings you saved with F4, in `recordings/`. The Whisper model stays in
-`~/.cache/huggingface/hub` until you delete it, and settings stay in `~/.config/tuxwhisper`.
+Then remove the keyboard shortcuts and delete the repo folder. These stay until you delete
+them: settings and lists in `~/.config/tuxwhisper`, recordings you saved with F4 in
+`~/.local/share/tuxwhisper/recordings`, and the Whisper model in `~/.cache/huggingface/hub`.

@@ -19,15 +19,18 @@
 
 ## Commands
 
-The keys run small commands, which you can also use from a terminal or script:
+The keys run small commands, which you can also use from a terminal or script. From PyPI the
+command is `tuxwhisper`; in a git clone, `./asr` runs the same commands:
 
 ```bash
-./asr toggle    # start / stop dictation
-./asr rewrite   # start / stop dictation with LLM cleanup
-./asr save      # save the last recording
-./asr settings  # open the settings menu
-./asr bind      # bind F5, F3, F4 and Alt+F9 on GNOME
-./asr serve     # run the daemon in the foreground (systemd does this at login)
+tuxwhisper toggle     # start / stop dictation
+tuxwhisper rewrite    # start / stop dictation with LLM cleanup
+tuxwhisper save       # save the last recording
+tuxwhisper settings   # open the settings menu
+tuxwhisper bind       # bind F5, F3, F4 and Alt+F9 on GNOME
+tuxwhisper serve      # run the daemon in the foreground (systemd does this at login)
+tuxwhisper setup      # install packages, service, shortcuts (same as ./install.sh)
+tuxwhisper uninstall  # remove what setup added (same as ./uninstall.sh)
 ```
 
 TuxWhisper ignores clips under 0.3 s; Whisper invents text on near-silence.

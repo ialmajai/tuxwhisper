@@ -1,0 +1,58 @@
+[project]
+name = "tuxwhisper"
+dynamic = ["version"]
+description = "Private, offline push-to-talk dictation for Linux, on X11 and Wayland"
+readme = "docs/pypi.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ibrahim Almajai" }]
+requires-python = ">=3.11"
+keywords = ["dictation", "speech-to-text", "whisper", "wayland", "linux", "voice-typing"]
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Environment :: X11 Applications",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "faster-whisper>=1.2,<2",
+    "numpy>=1.24",
+    "sounddevice>=0.5",
+    "evdev-binary>=1.6",  # prebuilt evdev: no compiler or kernel headers needed
+]
+
+[project.optional-dependencies]
+# NVIDIA GPUs (ASR_DEVICE=cuda, the default): CUDA libraries for faster-whisper.
+cuda = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12==9.*"]
+# AMD and Intel GPUs (ASR_DEVICE=vulkan): whisper.cpp. The PyPI wheels are CPU-only; build it
+# with GGML_VULKAN=1 and --no-binary-package pywhispercpp (tuxwhisper setup does this).
+vulkan = ["pywhispercpp>=1.5,<2"]
+
+[project.scripts]
+tuxwhisper = "tuxwhisper.asr:main"
+
+[project.urls]
+Homepage = "https://github.com/ialmajai/tuxwhisper"
+Documentation = "https://github.com/ialmajai/tuxwhisper#readme"
+Issues = "https://github.com/ialmajai/tuxwhisper/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "tuxwhisper/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tuxwhisper"]
+
+# `tuxwhisper setup` and `uninstall` run the same scripts as a git clone.
+[tool.hatch.build.targets.wheel.force-include]
+"install.sh" = "tuxwhisper/data/install.sh"
+"uninstall.sh" = "tuxwhisper/data/uninstall.sh"
+"tuxwhisper.service" = "tuxwhisper/data/tuxwhisper.service"
+"tuxwhisper-settings.desktop" = "tuxwhisper/data/tuxwhisper-settings.desktop"
+
+[tool.hatch.build.targets.sdist]
+include = ["tuxwhisper", "install.sh", "uninstall.sh", "tuxwhisper.service",
+           "tuxwhisper-settings.desktop", "asr", "docs/pypi.md", "LICENSE", "README.md"]

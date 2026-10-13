@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Removes what install.sh added. Your settings, saved takes and the repo itself stay.
+# Removes what install.sh (or `tuxwhisper setup`) added. Your settings and saved recordings stay.
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 RULE=/etc/udev/rules.d/60-uinput.rules
+CMD="${TUXWHISPER_CMD:-$DIR/asr}"   # set by `tuxwhisper uninstall`
+PY="${TUXWHISPER_PY:-$DIR/.venv/bin/python}"
 
 note() { printf '  %s\n' "$*"; }
 ask() { local a; read -r -p "  $1 [y/N] " a; [[ $a =~ ^[Yy] ]]; }
@@ -15,12 +17,12 @@ rm -rf "$UNIT_DIR/tuxwhisper.service" "$UNIT_DIR/tuxwhisper.service.d"
 systemctl --user daemon-reload
 note "Removed the background service."
 
-if command -v gsettings >/dev/null && [ -x "$DIR/.venv/bin/python" ] &&
-   gsettings list-schemas | grep -qx org.gnome.settings-daemon.plugins.media-keys; then
-    "$DIR/.venv/bin/python" - "$DIR" <<'EOF'
+if command -v gsettings >/dev/null && [ -x "$PY" ] &&
+   gsettings list-schemas | grep -x org.gnome.settings-daemon.plugins.media-keys >/dev/null; then
+    "$PY" - "$CMD" <<'EOF'
 import ast, subprocess, sys
 
-asr = sys.argv[1] + "/asr "
+asr = sys.argv[1] + " "
 schema = "org.gnome.settings-daemon.plugins.media-keys"
 def get(s, key):
     out = subprocess.run(["gsettings", "get", s, key], capture_output=True, text=True, check=True).stdout
@@ -44,7 +46,12 @@ fi
 
 echo
 note "Left in place, delete them yourself if you want:"
-note "  $DIR  (the app, and recordings/ with any saved takes)"
-note "  ${XDG_CONFIG_HOME:-$HOME/.config}/tuxwhisper  (your settings)"
+if [ -n "${TUXWHISPER_PACKAGED:-}" ]; then
+    note "  the tuxwhisper command itself: uv tool uninstall tuxwhisper (or pip uninstall tuxwhisper)"
+else
+    note "  $DIR  (the app)"
+fi
+note "  ${XDG_CONFIG_HOME:-$HOME/.config}/tuxwhisper  (your settings, vocabulary, replacements, modes)"
+note "  ${XDG_DATA_HOME:-$HOME/.local/share}/tuxwhisper  (recordings you saved with F4)"
 note "  ~/.cache/huggingface  (downloaded models; other apps may share it)"
 note "  ~/.local/share/pywhispercpp  (the Vulkan engine's model, if you used it)"

@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: sudo apt-get update && sudo apt-get install -y libportaudio2
-      - run: pip install ruff==0.16.10 -r requirements.txt
+      - run: pip install ruff==0.16.10 -e .
       - run: ruff check
       - run: shellcheck asr install.sh uninstall.sh
       - run: python -c "import faster_whisper, numpy, sounddevice, evdev"
@@ -46,7 +46,7 @@ jobs:
       - run: |
           export PATH="$HOME/.local/bin:$PATH"
           uv venv --python 3.12 .venv
-          uv pip install --python .venv -r requirements.txt
+          uv pip install --python .venv -e .
           .venv/bin/python -c "import faster_whisper, numpy, sounddevice, evdev"
           command -v xclip wl-copy zenity notify-send
           test -f /usr/share/sounds/freedesktop/stereo/device-added.oga
@@ -64,6 +64,24 @@ jobs:
       - run: |
           export PATH="$HOME/.local/bin:$PATH"
           uv venv --python 3.12 .venv
-          GGML_VULKAN=1 uv pip install --python .venv --no-binary pywhispercpp -r requirements-vulkan.txt
+          GGML_VULKAN=1 uv pip install --python .venv --no-binary pywhispercpp -e ".[vulkan]"
           ls .venv/lib/python3.12/site-packages/libggml-vulkan.so
           LD_LIBRARY_PATH=.venv/lib/python3.12/site-packages .venv/bin/python -c "from pywhispercpp.model import Model"
+
+  # Builds the PyPI package and installs it like a user would, in a clean container.
+  package:
+    runs-on: ubuntu-latest
+    container: debian:stable
+    steps:
+      - run: apt-get update && apt-get install -y curl ca-certificates
+      - uses: actions/checkout@v5
+      - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
+      - run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv build
+          uv tool install dist/*.whl
+          tuxwhisper setup --packages-only --yes
+          tuxwhisper 2>&1 | grep -q "tuxwhisper setup"
+          d=$(uv tool dir)/tuxwhisper/lib/python3*/site-packages/tuxwhisper/data
+          ls $d/install.sh $d/uninstall.sh $d/tuxwhisper.service $d/tuxwhisper-settings.desktop
+          $(uv tool dir)/tuxwhisper/bin/python -c "import faster_whisper, numpy, sounddevice, evdev"

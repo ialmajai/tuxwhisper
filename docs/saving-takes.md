@@ -1,6 +1,6 @@
 # Saving recordings (F4)
 
-F4 saves the most recent recording to `recordings/`:
+F4 saves the most recent recording to `~/.local/share/tuxwhisper/recordings/`:
 
 ```text
 recordings/

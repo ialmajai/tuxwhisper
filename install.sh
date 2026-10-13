@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # TuxWhisper installer. Safe to run again: each step skips what is already done.
+# Run it from a git clone (./install.sh), or as `tuxwhisper setup` after installing from PyPI.
 # docs/manual-install.md does the same steps by hand.
 #   --yes            answer yes to every question
 #   --packages-only  install the system packages and stop (used by CI)
@@ -8,6 +9,10 @@ set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
+# `tuxwhisper setup` runs this script from inside the installed package and passes its command;
+# a git clone runs ./asr, which uses the clone's .venv.
+PACKAGED="${TUXWHISPER_PACKAGED:-}"
+CMD="${TUXWHISPER_CMD:-$DIR/asr}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 RULE=/etc/udev/rules.d/60-uinput.rules
@@ -27,7 +32,7 @@ step() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
 ask() { local a; [ "$YES" = 1 ] && return 0; read -r -p "  $1 [Y/n] " a; [[ -z $a || $a =~ ^[Yy] ]]; }
 
-case "$DIR" in *[\"\|\&\\]*) echo "Move the repo to a path without \" | & or \\ characters." >&2; exit 1 ;; esac
+case "$DIR$CMD" in *[\"\|\&\\]*) echo "Move TuxWhisper to a path without \" | & or \\ characters." >&2; exit 1 ;; esac
 
 # Speech engine: faster-whisper with CUDA on NVIDIA, whisper.cpp with Vulkan on AMD or Intel GPUs
 # (PCI vendors 0x1002 and 0x8086), otherwise faster-whisper on the CPU.
@@ -44,21 +49,21 @@ step "1/6  System packages"
 # shellcheck source=/dev/null
 . /etc/os-release 2>/dev/null || true
 case " ${ID:-} ${ID_LIKE:-} " in
-    *" debian "*|*" ubuntu "*) pm=(apt-get install -y) pkgs=(gcc linux-libc-dev libportaudio2 xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop)
+    *" debian "*|*" ubuntu "*) pm=(apt-get install -y) pkgs=(libportaudio2 xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop)
         vulkan=(g++ cmake libvulkan-dev glslc spirv-headers glslang-tools mesa-vulkan-drivers) ;;
-    *" fedora "*) pm=(dnf install -y) pkgs=(gcc kernel-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop)
+    *" fedora "*) pm=(dnf install -y) pkgs=(portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop)
         vulkan=(gcc-c++ cmake vulkan-loader-devel glslc spirv-headers-devel glslang mesa-vulkan-drivers) ;;
-    *" arch "*) pm=(pacman -S --needed --noconfirm) pkgs=(gcc linux-api-headers portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop)
-        vulkan=(cmake vulkan-icd-loader vulkan-headers shaderc spirv-headers glslang vulkan-radeon vulkan-intel) ;;
-    *" suse "*|*" opensuse "*) pm=(zypper -n install) pkgs=(gcc linux-glibc-devel portaudio xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop)
+    *" arch "*) pm=(pacman -S --needed --noconfirm) pkgs=(portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop)
+        vulkan=(gcc cmake vulkan-icd-loader vulkan-headers shaderc spirv-headers glslang vulkan-radeon vulkan-intel) ;;
+    *" suse "*|*" opensuse "*) pm=(zypper -n install) pkgs=(portaudio xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop)
         vulkan=(gcc-c++ cmake vulkan-devel shaderc spirv-headers glslang-devel libvulkan_radeon libvulkan_intel) ;;
     *) pm=() pkgs=() vulkan=() ;;
 esac
 # The Vulkan engine is compiled on install: a C++ compiler, CMake, Vulkan headers and shader tools.
 [ "$engine" = vulkan ] && pkgs+=("${vulkan[@]}")
 have_all() {
-    command -v gcc && { command -v xclip || command -v wl-copy; } && command -v zenity && command -v notify-send &&
-        [ -f /usr/include/linux/input.h ] && [ -f /usr/share/sounds/freedesktop/stereo/device-added.oga ] &&
+    { command -v xclip || command -v wl-copy; } && command -v zenity && command -v notify-send &&
+        [ -f /usr/share/sounds/freedesktop/stereo/device-added.oga ] &&
         { ldconfig -p 2>/dev/null || /sbin/ldconfig -p; } | grep libportaudio >/dev/null &&
         { [ "$engine" != vulkan ] || { command -v g++ && command -v cmake && command -v glslc &&
             command -v glslangValidator && [ -f /usr/include/vulkan/vulkan.h ]; }; }
@@ -85,16 +90,36 @@ command -v uv >/dev/null || { echo "Install uv first: https://docs.astral.sh/uv/
 command -v systemctl >/dev/null || { echo "TuxWhisper needs systemd. See docs/manual-install.md." >&2; exit 1; }
 
 step "2/6  Python packages"
-[ -d .venv ] || uv venv -q --python 3.12 .venv
 case "$engine" in
-    cuda) note "NVIDIA GPU: installing the CUDA build."
-        uv pip install -q --python .venv -r requirements-cuda.txt ;;
-    vulkan) note "AMD or Intel GPU: building whisper.cpp with Vulkan (a few minutes)."
-        note "Untested on AMD and Intel so far; if it's slow, run ./install.sh --engine=cpu."
-        GGML_VULKAN=1 uv pip install -q --python .venv --no-binary pywhispercpp -r requirements-vulkan.txt ;;
-    cpu) note "No supported GPU: installing the CPU build (slower)."
-        uv pip install -q --python .venv -r requirements.txt ;;
+    cuda) extra="[cuda]"; note "NVIDIA GPU: using the CUDA build." ;;
+    vulkan) extra="[vulkan]"
+        note "AMD or Intel GPU: using whisper.cpp with Vulkan, built here (a few minutes)."
+        note "Untested on AMD and Intel so far; if it's slow, run this again with --engine=cpu." ;;
+    cpu) extra=""; note "No supported GPU: using the CPU build (slower)." ;;
 esac
+build=(); [ "$engine" = vulkan ] && build=(env GGML_VULKAN=1)
+if [ -n "$PACKAGED" ]; then
+    # Installed with uv or pip: add the GPU libraries if this install lacks them.
+    PY="$TUXWHISPER_PY"
+    case "$engine" in
+        cuda) check='import nvidia.cudnn, nvidia.cublas' ;;
+        vulkan) check='import os, sysconfig; assert os.path.exists(sysconfig.get_paths()["purelib"] + "/libggml-vulkan.so")' ;;
+        cpu) check='pass' ;;
+    esac
+    if "$PY" -c "$check" 2>/dev/null; then
+        note "Already installed."
+    else
+        spec="tuxwhisper$extra==$TUXWHISPER_VERSION"
+        nobin=(); [ "$engine" = vulkan ] && nobin=(--no-binary-package pywhispercpp)
+        note "This runs: ${build[*]} uv tool install --reinstall ${nobin[*]} '$spec'"
+        "${build[@]}" uv tool install -q --reinstall "${nobin[@]}" "$spec"
+    fi
+else
+    [ -d .venv ] || uv venv -q --python 3.12 .venv
+    uv pip uninstall -q --python .venv evdev 2>/dev/null || true  # replaced by evdev-binary in 0.2
+    nobin=(); [ "$engine" = vulkan ] && nobin=(--no-binary pywhispercpp)
+    "${build[@]}" uv pip install -q --python .venv "${nobin[@]}" -e ".$extra"
+fi
 
 step "3/6  Virtual keyboard (lets TuxWhisper type for you)"
 if [ -f "$RULE" ] && grep -qF "$RULE_TEXT" "$RULE"; then
@@ -118,14 +143,14 @@ if ! systemctl --user is-active -q graphical-session.target; then
     service=0
     note "Your desktop doesn't start systemd's graphical session (common on i3 and Sway)."
     note "Start TuxWhisper from your window manager's config instead, e.g.:"
-    note "  exec \"$DIR/asr\" serve"
+    note "  exec \"$CMD\" serve"
     note "See docs/other-desktops.md."
 else
     mkdir -p "$UNIT_DIR"
     if [ -f "$UNIT_DIR/tuxwhisper.service" ]; then
         note "Keeping your existing $UNIT_DIR/tuxwhisper.service."
     else
-        sed "s|^ExecStart=.*|ExecStart=\"$DIR/asr\" serve|" tuxwhisper.service > "$UNIT_DIR/tuxwhisper.service"
+        sed "s|^ExecStart=.*|ExecStart=\"$CMD\" serve|" tuxwhisper.service > "$UNIT_DIR/tuxwhisper.service"
         note "Installed $UNIT_DIR/tuxwhisper.service."
     fi
     # One drop-in file names the engine; NVIDIA needs none (cuda is the default).
@@ -144,15 +169,15 @@ fi
 
 step "5/6  Keyboard shortcuts and app-grid launcher"
 if [[ "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]]; then
-    ./asr bind | sed 's/^/  /'
+    "$CMD" bind | sed 's/^/  /'
     note "F5 and F3 now replace page refresh and find-next in browsers; Ctrl+R and Ctrl+G still work."
 else
     note "Bind these in your desktop's shortcut settings (docs/other-desktops.md):"
-    note "  F5 -> \"$DIR/asr\" toggle      F3 -> \"$DIR/asr\" rewrite"
-    note "  F4 -> \"$DIR/asr\" save        Alt+F9 -> \"$DIR/asr\" settings"
+    note "  F5 -> \"$CMD\" toggle      F3 -> \"$CMD\" rewrite"
+    note "  F4 -> \"$CMD\" save        Alt+F9 -> \"$CMD\" settings"
 fi
 mkdir -p "$APPS_DIR"
-sed "s|@DIR@|$DIR|" tuxwhisper-settings.desktop > "$APPS_DIR/tuxwhisper-settings.desktop"
+sed "s|@CMD@|$CMD|" tuxwhisper-settings.desktop > "$APPS_DIR/tuxwhisper-settings.desktop"
 note "Added \"TuxWhisper Settings\" to your app grid."
 
 step "6/6  Loading the speech model"

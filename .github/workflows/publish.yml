@@ -1,0 +1,23 @@
+name: Publish
+
+# Push a tag like v0.2.0 to build and publish to PyPI. The version comes from
+# tuxwhisper/__init__.py, which must match the tag. PyPI trusts this workflow through a
+# "trusted publisher" entry, so no token is stored in the repo.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  pypi:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: |
+          version=$(grep -oP '__version__ = "\K[^"]+' tuxwhisper/__init__.py)
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != version $version"; exit 1; }
+      - run: uv build
+      - run: uv publish --trusted-publishing always

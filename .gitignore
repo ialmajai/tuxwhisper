@@ -8,3 +8,5 @@ replacements.txt
 modes.txt
 PRODUCT.md
 .impeccable/
+dist/
+*.egg-info/

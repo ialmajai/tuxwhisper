@@ -43,14 +43,15 @@ menu.
 <summary><b>It pastes my old clipboard instead of the transcript</b></summary>
 
 The app read the clipboard after TuxWhisper had restored it. Increase the `0.3` s delay in
-`paste()` in `asr.py`.
+`paste()` in `tuxwhisper/asr.py`.
 </details>
 
 <details>
 <summary><b>The daemon exits with "cuda unavailable"</b></summary>
 
-TuxWhisper couldn't use the GPU or the CUDA libraries. Check that you installed from
-`requirements-cuda.txt` and that `nvidia-smi` works, or switch to [CPU mode](configuration.md#cpu-mode).
+TuxWhisper couldn't use the GPU or the CUDA libraries. Check that `nvidia-smi` works and run
+`./install.sh` (or `tuxwhisper setup`) again, which adds the CUDA libraries, or switch to
+[CPU mode](configuration.md#cpu-mode).
 </details>
 
 <details>
