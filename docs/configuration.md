@@ -12,6 +12,9 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
   `Ctrl+Alt+D`; it takes effect at once. On GNOME only; other desktops set keys in their own
   settings ([Other desktops](other-desktops.md)).
 - Cleanup mode (Clean up, Email, Bullet points…), the LLM model, and a model per mode
+- Speech model: Whisper models from tiny (fastest) to large-v3 (most accurate), with their
+  download sizes. TuxWhisper restarts, downloads a new model the first time with a notification,
+  and goes back to the default if a model won't load.
 - Vocabulary, replacements and custom cleanup modes
 - Recent transcripts: the last 20 this session; pick one to copy it again. TuxWhisper keeps
   them in `$XDG_RUNTIME_DIR`, which only you can read and which empties when you log out.
@@ -30,7 +33,7 @@ priority for the rest. Add variables to the `[Service]` section of
 |----------|---------|---------|
 | `ASR_LANGUAGE` | auto-detect | Language code, e.g. `en`. Setting it avoids misdetection on short clips. |
 | `ASR_DEVICE` | `cuda` | `cuda` (NVIDIA), `vulkan` (AMD/Intel GPUs) or `cpu` |
-| `ASR_MODEL` | `large-v3-turbo` (GPU), `small` (CPU) | Any faster-whisper model name or path |
+| `ASR_MODEL` | `large-v3-turbo` (GPU), `small` (CPU) | Any faster-whisper model name or path; the settings menu's **Speech model** overrides it |
 | `ASR_PROMPT` | a short punctuated sentence | Style example for Whisper; keeps capitals and punctuation. Used for English only. Set to empty to disable. |
 | `ASR_SOUNDS` | `1` | `0` turns off the start and stop sounds |
 | `ASR_SOUND_VOLUME` | `40` | Sound volume, as a percent of the system volume |

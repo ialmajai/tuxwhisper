@@ -35,6 +35,17 @@ CPU_MODEL = "small"  # large models are too slow for live dictation on most CPUs
 # Clipping: samples at full scale, as when speaking too close to the mic or with the gain too high.
 CLIP_LEVEL, CLIP_SHARE, CLIP_WARN_EVERY = 0.99, 0.001, 600  # level, share of samples, seconds
 VULKAN_MODEL = "large-v3-turbo"  # whisper.cpp's name for the same model
+# Speech models offered in the settings menu: name, what it's good for, download size. Both
+# engines download them by these names; the distil model exists only for faster-whisper.
+ASR_MODELS = [
+    ("large-v3-turbo", "Best balance of speed and accuracy (GPU default)", "1.6 GB"),
+    ("large-v3", "Most accurate, about twice as slow; needs about 4 GB of GPU memory", "3.1 GB"),
+    ("distil-large-v3.5", "English only: fast and accurate", "1.5 GB"),
+    ("medium", "Good accuracy, lighter", "1.5 GB"),
+    ("small", "Fast; the CPU default", "0.5 GB"),
+    ("base", "Very fast, less accurate", "0.15 GB"),
+    ("tiny", "Fastest, least accurate", "0.08 GB"),
+]
 # Silero voice activity detection for whisper.cpp; faster-whisper ships its own copy.
 VAD_MODEL_URL = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
 LANGUAGE = os.environ.get("ASR_LANGUAGE") or None  # e.g. "en"; None = auto-detect
@@ -79,6 +90,7 @@ def settings():
     """Live settings: environment defaults overridden by the config file, re-read on every use."""
     s = {"sounds": SOUNDS, "sound_volume": SOUND_VOLUME, "language": LANGUAGE or "",
          "paste_key": PASTE_KEY, "rewrite_model": REWRITE_MODEL, "mode": "Clean up",
+         "asr_model": os.environ.get("ASR_MODEL", ""),
          "mode_models": {}}
     s.update({k: v for k, v in read_config().items() if k in s})
     try:
@@ -699,28 +711,66 @@ class WhisperCpp:
             return self.model.transcribe(audio, **params), None
 
 
-def load_model():
-    """Whisper on an NVIDIA GPU (default), on another GPU with ASR_DEVICE=vulkan, or on the CPU
-    with ASR_DEVICE=cpu (int8, smaller model)."""
+def default_asr_model():
+    return {"cpu": CPU_MODEL, "vulkan": VULKAN_MODEL}.get(DEVICE, GPU_MODEL)
+
+
+def asr_model():
+    """The speech model picked in the settings menu, else ASR_MODEL, else the engine's default."""
+    return settings()["asr_model"] or default_asr_model()
+
+
+def asr_models():
+    """The menu's models this engine can run."""
+    return [m for m in ASR_MODELS if DEVICE != "vulkan" or not m[0].startswith("distil")]
+
+
+def model_downloaded(name):
     if DEVICE == "vulkan":
-        model = os.environ.get("ASR_MODEL", VULKAN_MODEL)
-        print(f"loading {model} on vulkan (whisper.cpp) ...", flush=True)
-        try:
-            return WhisperCpp(model)
-        except ImportError as e:
-            sys.exit(f"pywhispercpp missing ({e}); run ./install.sh again")
+        from pywhispercpp.constants import MODELS_DIR
+        return os.path.exists(os.path.join(MODELS_DIR, f"ggml-{name}.bin"))
+    from faster_whisper.utils import _MODELS
+    from huggingface_hub import try_to_load_from_cache
+    return isinstance(try_to_load_from_cache(_MODELS.get(name, name), "model.bin"), str)
+
+
+def load_whisper(name):
+    print(f"loading {name} on {DEVICE} ...", flush=True)
+    if DEVICE == "vulkan":
+        return WhisperCpp(name)
     from faster_whisper import WhisperModel
     on_cpu = DEVICE == "cpu"
-    model = os.environ.get("ASR_MODEL", CPU_MODEL if on_cpu else GPU_MODEL)
-    print(f"loading {model} on {DEVICE} ...", flush=True)
-    try:
-        return WhisperModel(model, device="cpu" if on_cpu else "cuda",
-                            compute_type="int8" if on_cpu else "float16")
-    except Exception as e:
-        if not on_cpu:
-            notify("Dictation can't use the GPU; see the log, or set ASR_DEVICE=cpu")
-            sys.exit(f"cuda unavailable ({e}); set ASR_DEVICE=cpu to run on the CPU")
-        raise
+    return WhisperModel(name, device="cpu" if on_cpu else "cuda", compute_type="int8" if on_cpu else "float16")
+
+
+def load_model():
+    """Whisper on an NVIDIA GPU (default), on another GPU with ASR_DEVICE=vulkan, or on the CPU
+    with ASR_DEVICE=cpu (int8, smaller model). A first use downloads the model; a model that
+    won't load falls back to the engine's default instead of failing at every start."""
+    name, default = asr_model(), default_asr_model()
+    for attempt in dict.fromkeys([name, default]):
+        downloading = None
+        try:
+            if not model_downloaded(attempt):
+                downloading = notify(f"⏳ Downloading the speech model {attempt}…", persistent=True,
+                                     body="<i>Dictation starts when it's ready</i>")
+            model = load_whisper(attempt)
+        except ImportError as e:
+            sys.exit(f"pywhispercpp missing ({e}); run ./install.sh again")
+        except Exception as e:
+            close_notification(downloading)
+            if attempt != default:
+                print(f"couldn't load {attempt} ({e}); using {default}", flush=True)
+                notify(f"Couldn't load the speech model {attempt}; using {default}. See the log.")
+                continue
+            if DEVICE != "cpu":
+                notify("Dictation can't use the GPU; see the log, or set ASR_DEVICE=cpu")
+                sys.exit(f"{DEVICE} unavailable ({e}); set ASR_DEVICE=cpu to run on the CPU")
+            raise
+        if downloading:
+            close_notification(downloading)
+            notify(f"✅ Speech model {attempt} is ready")
+        return model
 
 
 # xclip works on X11 and on Wayland desktops with XWayland (GNOME, KDE, most others);
@@ -921,6 +971,31 @@ def save_settings(s):
                      for k, v in s.items())
 
 
+def pick_asr_model(current):
+    """Choose the speech model; the daemon restarts and downloads it on first use."""
+    current = current or default_asr_model().split("-whisper-")[-1]
+    labels = {f"{n} ({size}{', downloaded' if model_downloaded(n) else ''}): {about}": n
+              for n, about, size in asr_models()}
+    picked = zenity("--list", "--title=Speech model", "--width=640", "--height=360",
+                    "--text=The model that turns your speech into text. Bigger is more accurate but slower.",
+                    "--column=Current", "--column=Model", "--print-column=2",
+                    *[x for label, n in labels.items() for x in ("✓" if n == current else "", label)])
+    if not picked or labels[picked] == current:
+        return
+    name = labels[picked]
+    cfg = read_config()
+    cfg["asr_model"] = name
+    save_settings(cfg)
+    running = subprocess.run(["systemctl", "--user", "is-active", "-q", APP]).returncode == 0
+    if running:
+        subprocess.run(["systemctl", "--user", "restart", APP])
+        zenity("--info", "--title=Speech model", f"--text=Switching to {name}. "
+               + ("A notification shows when it's ready." if not model_downloaded(name)
+                  else "Dictation is back in about 15 seconds."))
+    else:
+        zenity("--info", "--title=Speech model", f"--text={name} is used from the next start of TuxWhisper.")
+
+
 def keys_summary():
     shortcuts = gnome_shortcuts()
     if shortcuts is None:
@@ -946,6 +1021,8 @@ def settings_menu():
                 "mode", "Cleanup mode", mode + tag["mode"],
                 "rewrite_model", "LLM model (cleanup)", s["rewrite_model"] + tag["rewrite_model"],
                 "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as LLM model"),
+                "asr_model", "Speech model", (s["asr_model"] or default_asr_model().split("-whisper-")[-1])
+                + tag["asr_model"],
                 "history", "Recent transcripts", f"{len(load_history())} this session",
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…",
@@ -979,6 +1056,9 @@ def settings_menu():
             picked = pick("Paste key", list(PASTE_KEYS), s["paste_key"])
             if picked:
                 cfg["paste_key"] = picked
+        elif choice == "asr_model":
+            pick_asr_model(s["asr_model"])
+            continue
         elif choice == "keys":
             keys_menu()
             continue
