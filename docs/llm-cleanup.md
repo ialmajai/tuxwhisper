@@ -36,7 +36,7 @@ ollama pull llama3.2
 
 ## Modes
 
-Pick what F3 does in the settings menu (**F3 mode**). The recording notification shows the
+Pick what F3 does in the settings menu (**Cleanup mode**). The recording notification shows the
 active mode.
 
 | Mode | What you get |
@@ -47,7 +47,7 @@ active mode.
 | Email | A short, polite email |
 | Bullet points | A concise bullet list |
 
-Add your own under **Custom F3 modes** in the menu, one `Name => instruction` per line:
+Add your own under **Custom cleanup modes** in the menu, one `Name => instruction` per line:
 
 ```text
 Tweet => Rewrite as a tweet under 280 characters.
@@ -59,7 +59,7 @@ check the result before sending it.
 
 Each mode can use its own model: pick the mode, then the **Model for …** row below it in the menu. For
 example, keep the fast default for Clean up and use a bigger model for Email. Modes without
-their own model use **LLM model (F3)**. A bigger model needs more GPU memory and takes longer.
+their own model use **LLM model (cleanup)**. A bigger model needs more GPU memory and takes longer.
 
 Ollama can run on another machine; point `OLLAMA_URL` at it (see
 [Configuration](configuration.md)).

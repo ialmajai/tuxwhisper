@@ -45,8 +45,8 @@ Tested on GNOME (Wayland) with an NVIDIA GPU and in CPU mode, and on
 | **F4** | [Save the last recording](docs/saving-takes.md) and its transcript for fine-tuning. |
 | **Alt+F9** | Open the [settings menu](docs/configuration.md#settings-menu). |
 
-The installer binds these keys on GNOME. Wait for the "🎙 Recording…" notification and the start
-sound before speaking.
+Setup binds these keys on GNOME; change any of them under **Keys** in the settings menu.
+Wait for the "🎙 Recording…" notification and the start sound before speaking.
 
 ## Install
 

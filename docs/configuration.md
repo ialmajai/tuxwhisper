@@ -8,8 +8,11 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
 - Sounds on or off, and their volume
 - Language
 - Paste key
-- F3 mode (Clean up, Email, Bullet points…), the LLM model, and a model per mode
-- Vocabulary, replacements and custom F3 modes
+- Keys: the key for each action. Pick from a list or type any combination, such as
+  `Ctrl+Alt+D`; it takes effect at once. On GNOME only; other desktops set keys in their own
+  settings ([Other desktops](other-desktops.md)).
+- Cleanup mode (Clean up, Email, Bullet points…), the LLM model, and a model per mode
+- Vocabulary, replacements and custom cleanup modes
 - Recent transcripts: the last 20 this session; pick one to copy it again. TuxWhisper keeps
   them in `$XDG_RUNTIME_DIR`, which only you can read and which empties when you log out.
 

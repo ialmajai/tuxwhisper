@@ -132,6 +132,109 @@ def settings_shortcut():
 
 
 GNOME_KEYS = {"toggle": "F5", "rewrite": "F3", "save": "F4", "settings": "<Alt>F9"}
+KEY_ACTIONS = {"toggle": "Dictate", "rewrite": "Dictate with LLM cleanup",
+               "save": "Save the last recording", "settings": "Open this settings menu"}
+KEY_SUGGESTIONS = ["F5", "F3", "F4", "F6", "F7", "F8", "F9", "F10", "F12", "Alt+F9",
+                   "Ctrl+Alt+D", "Super+H"]
+MEDIA_KEYS = "org.gnome.settings-daemon.plugins.media-keys"
+
+
+def key_label(binding):
+    """GNOME's "<Control><Alt>d" as "Ctrl+Alt+D"."""
+    mods, key = re.match(r"((?:<\w+>)*)(.*)", binding).groups()
+    mods = re.sub(r"<(\w+)>", r"\1+", mods).replace("Primary+", "Ctrl+").replace("Control+", "Ctrl+")
+    return mods + key[:1].upper() + key[1:]
+
+
+def parse_key(text):
+    """"Ctrl+Alt+D" or "F6" as GNOME's "<Control><Alt>d" / "F6"; None if it isn't a usable key."""
+    *mods, key = [part.strip() for part in text.split("+")]
+    names = {"ctrl": "<Control>", "control": "<Control>", "alt": "<Alt>", "shift": "<Shift>",
+             "super": "<Super>"}
+    special = {"space": "space", "insert": "Insert", "home": "Home", "end": "End", "pause": "Pause",
+               "print": "Print", "menu": "Menu"}
+    if any(m.lower() not in names for m in mods):
+        return None
+    if re.fullmatch(r"[Ff]([1-9]|1[0-9]|2[0-4])", key):
+        key = key.upper()
+    elif re.fullmatch(r"[A-Za-z0-9]", key) or key.lower() in special:
+        if not mods:  # a bare letter or space would stop you typing it
+            return None
+        key = special.get(key.lower(), key.lower())
+    else:
+        return None
+    return "".join(names[m.lower()] for m in mods) + key
+
+
+def gnome_shortcuts():
+    """Every GNOME custom shortcut as {path: (binding, command)}, or None when not on GNOME."""
+    def get(*args):
+        r = subprocess.run(["gsettings", "get", *args], capture_output=True, text=True, timeout=5)
+        if r.returncode:
+            raise FileNotFoundError(r.stderr)
+        return r.stdout.strip()
+    try:
+        paths = re.findall(r"'([^']+)'", get(MEDIA_KEYS, "custom-keybindings"))
+        return {p: tuple(get(f"{MEDIA_KEYS}.custom-keybinding:{p}", k).strip("'") for k in ("binding", "command"))
+                for p in paths}
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def set_shortcut(cmd, binding, path, paths):
+    """Point TuxWhisper's shortcut for cmd at binding, creating the shortcut if needed."""
+    def gs(*args):
+        subprocess.run(["gsettings", "set", *args], check=True, timeout=5)
+    if path is None:
+        path = f"/{MEDIA_KEYS.replace('.', '/')}/custom-keybindings/tuxwhisper-{cmd}/"
+        while path in paths:
+            path = path[:-1] + "-1/"
+        gs(f"{MEDIA_KEYS}.custom-keybinding:{path}", "name", f"TuxWhisper {cmd}")
+        gs(f"{MEDIA_KEYS}.custom-keybinding:{path}", "command", f"{shlex.quote(command_path())} {cmd}")
+        gs(MEDIA_KEYS, "custom-keybindings", str([*paths, path]))
+    gs(f"{MEDIA_KEYS}.custom-keybinding:{path}", "binding", binding)
+
+
+def keys_menu():
+    """Change the key for each action; GNOME applies it immediately."""
+    def esc(text):  # zenity reads --text as Pango markup
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    while True:
+        shortcuts = gnome_shortcuts()
+        if shortcuts is None:
+            zenity("--info", "--title=Keys", "--text=On this desktop, keys are set in its own shortcut "
+                   "settings. See docs/other-desktops.md for each desktop.")
+            return
+        ours = {cmd: next(((p, b) for p, (b, c) in shortcuts.items()
+                           if c.endswith((f"asr {cmd}", f"{APP} {cmd}"))), None) for cmd in KEY_ACTIONS}
+        rows = [x for cmd, label in KEY_ACTIONS.items()
+                for x in (cmd, label, key_label(ours[cmd][1]) if ours[cmd] else "not bound")]
+        cmd = zenity("--list", "--title=Keys", "--width=420", "--height=300",
+                     "--text=Pick an action to change its key.", "--column=cmd", "--column=Action",
+                     "--column=Key", "--hide-column=1", "--print-column=1",
+                     "--ok-label=Change", "--cancel-label=Back", *rows)
+        if not cmd:
+            return
+        cmd = cmd.split("|")[0]
+        path = ours[cmd][0] if ours[cmd] else None
+        picked = pick(f"Key: {KEY_ACTIONS[cmd]}", [*KEY_SUGGESTIONS, "Other…"],
+                      key_label(ours[cmd][1]) if ours[cmd] else None)
+        if picked == "Other…":
+            picked = zenity("--entry", f"--title=Key: {KEY_ACTIONS[cmd]}",
+                            "--text=Type a key or combination, e.g. F6, Ctrl+Alt+D or Super+Space:")
+        if not picked:
+            continue
+        binding = parse_key(picked)
+        if not binding:
+            zenity("--error", "--title=Keys", f"--text={esc(picked)} isn't a key TuxWhisper can use. "
+                   "Try a function key (F1–F24) or a combination with Ctrl, Alt, Shift or Super.")
+            continue
+        other = next((c for p, (b, c) in shortcuts.items() if b == binding and p != path), None)
+        if other is not None and zenity(
+                "--question", "--title=Keys",
+                f"--text={esc(key_label(binding))} already runs:\n{esc(other)}\n\nUse it anyway?") is None:
+            continue
+        set_shortcut(cmd, binding, path, list(shortcuts))
 
 
 def bind_gnome():
@@ -398,8 +501,7 @@ class Dictation:
         self.stream = None
         self.indicator = None  # ID of the on-screen recording notification
         self.last_clip_warning = -CLIP_WARN_EVERY
-        key = settings_shortcut()  # looked up once; shown as a hint while recording
-        self.hint = f"<i>⚙ {key}</i>" if key else None  # GNOME allows only b/i/u markup
+        self.refresh_hint()
         self.chunks = []
         self.last_press = 0.0
         self.last_take = None  # (audio, text) of the latest transcription
@@ -492,6 +594,12 @@ class Dictation:
         add_history(text)
         self.paste(text + " ")
         self.warn_if_clipped(audio)
+        threading.Thread(target=self.refresh_hint, daemon=True).start()  # in case the key changed
+
+    def refresh_hint(self):
+        """The settings key, shown under "Recording…"; looked up off the hot path (about 50 ms)."""
+        key = settings_shortcut()
+        self.hint = f"<i>⚙ {key}</i>" if key else None  # GNOME allows only b/i/u markup
 
     def warn_if_clipped(self, audio):
         """Tell the user, after the paste, when the mic was too loud; at most every 10 minutes."""
@@ -813,6 +921,15 @@ def save_settings(s):
                      for k, v in s.items())
 
 
+def keys_summary():
+    shortcuts = gnome_shortcuts()
+    if shortcuts is None:
+        return "set in your desktop"
+    keys = [next((key_label(b) for b, c in shortcuts.values() if c.endswith((f"asr {cmd}", f"{APP} {cmd}"))), "–")
+            for cmd in KEY_ACTIONS]
+    return ", ".join(keys)
+
+
 def settings_menu():
     if not shutil.which("zenity"):
         sys.exit("The settings menu needs zenity (e.g. sudo apt install zenity).")
@@ -825,13 +942,14 @@ def settings_menu():
                 "sound_volume", "Sound volume", f"{s['sound_volume']}%" + tag["sound_volume"],
                 "language", "Language", LANGUAGES.get(s["language"], "auto-detect") + tag["language"],
                 "paste_key", "Paste key", s["paste_key"] + tag["paste_key"],
-                "mode", "F3 mode", mode + tag["mode"],
-                "rewrite_model", "LLM model (F3)", s["rewrite_model"] + tag["rewrite_model"],
+                "keys", "Keys", keys_summary(),
+                "mode", "Cleanup mode", mode + tag["mode"],
+                "rewrite_model", "LLM model (cleanup)", s["rewrite_model"] + tag["rewrite_model"],
                 "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as LLM model"),
                 "history", "Recent transcripts", f"{len(load_history())} this session",
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…",
-                "modes", "Custom F3 modes", "Edit…"]
+                "modes", "Custom cleanup modes", "Edit…"]
         choice = zenity("--list", "--title=TuxWhisper settings", "--width=440", "--height=440",
                         "--text=Pick an item. Setting changes apply on the next recording.",
                         "--column=key", "--column=Setting", "--column=Value",
@@ -861,12 +979,15 @@ def settings_menu():
             picked = pick("Paste key", list(PASTE_KEYS), s["paste_key"])
             if picked:
                 cfg["paste_key"] = picked
+        elif choice == "keys":
+            keys_menu()
+            continue
         elif choice == "mode":
-            picked = pick("F3 mode", list(modes()), mode)
+            picked = pick("Cleanup mode", list(modes()), mode)
             if picked:
                 cfg["mode"] = picked
         elif choice == "modes":
-            edit_list(MODES_FILE, "Custom F3 modes",
+            edit_list(MODES_FILE, "Custom cleanup modes",
                       "# One mode per line: Name => instruction for the LLM, e.g.\n"
                       "# Tweet => Rewrite as a tweet under 280 characters.\n")
             continue

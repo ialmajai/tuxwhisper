@@ -116,8 +116,8 @@ On GNOME, run this in the repo folder:
 ```
 
 It adds F5, F3, F4 and Alt+F9 as custom shortcuts. It keeps your other shortcuts, keeps any
-key you already changed, and skips a key another shortcut uses. Change them later in
-Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts. KDE, Hyprland, Sway, i3: see
+key you already changed, and skips a key another shortcut uses. Change them later under
+**Keys** in the settings menu, or in Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts. KDE, Hyprland, Sway, i3: see
 [Other desktops](other-desktops.md).
 
 F5 and F3 replace page refresh and find-next in browsers and many editors. Ctrl+R and Ctrl+G
