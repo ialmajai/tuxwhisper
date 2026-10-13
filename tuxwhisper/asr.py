@@ -59,7 +59,7 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 PASTE_KEY = os.environ.get("ASR_PASTE_KEY", "shift+insert")
 SOUNDS = os.environ.get("ASR_SOUNDS", "1") != "0"  # beep on start and stop
 # Percent of the system volume, so the beeps never get louder than your other sounds.
-SOUND_VOLUME = int(os.environ.get("ASR_SOUND_VOLUME", "40"))
+SOUND_VOLUME = os.environ.get("ASR_SOUND_VOLUME", "40")  # validated in settings()
 PASTE_KEYS = {"shift+insert": ["KEY_LEFTSHIFT", "KEY_INSERT"],
               "ctrl+v": ["KEY_LEFTCTRL", "KEY_V"],
               "ctrl+shift+v": ["KEY_LEFTCTRL", "KEY_LEFTSHIFT", "KEY_V"]}
@@ -101,6 +101,8 @@ def settings():
         s["paste_key"] = "shift+insert"
     if not isinstance(s["mode_models"], dict):
         s["mode_models"] = {}
+    if s["language"] not in LANGUAGES:  # also catches a wrong type from a hand-edited config
+        s["language"] = ""
     return s
 
 
@@ -510,6 +512,9 @@ class Dictation:
             print(f"virtual keyboard unavailable ({e}); transcripts go to the clipboard", flush=True)
             notify("No virtual keyboard: transcripts are copied, paste them with Ctrl+V")
         self.lock = threading.Lock()
+        # Takes are transcribed and pasted one at a time, in the order they stopped.
+        self.turn = threading.Condition()
+        self.next_ticket = self.serving = 0
         self.stream = None
         self.indicator = None  # ID of the on-screen recording notification
         self.last_clip_warning = -CLIP_WARN_EVERY
@@ -555,10 +560,16 @@ class Dictation:
                     self.warming = threading.Thread(target=warm_rewrite_model, daemon=True)
                     self.warming.start()
                 sound("device-added")  # 0.2 s; over before the mic finishes opening
-                self.stream = self.sd.InputStream(
-                    samplerate=RATE, channels=1, dtype="float32",
-                    callback=lambda data, *_: self.chunks.append(data.copy()))
-                self.stream.start()
+                try:
+                    stream = self.sd.InputStream(
+                        samplerate=RATE, channels=1, dtype="float32",
+                        callback=lambda data, *_: self.chunks.append(data.copy()))
+                    stream.start()
+                except Exception as e:  # noqa: BLE001 - unplugged, busy or no mic: stay ready
+                    print(f"microphone unavailable: {e}", flush=True)
+                    notify("🎙 Microphone unavailable; check that it's connected and not in use")
+                    return
+                self.stream = stream
                 self.indicator = notify(f"🎙 Recording ({current_mode()})…" if rewrite else "🎙 Recording…",
                                         persistent=True, body=self.hint)
                 return
@@ -570,6 +581,20 @@ class Dictation:
             close_notification(self.indicator)
             sound("device-removed")
             chunks, self.chunks = self.chunks, []
+            # This take's own mode: the next take may start before this one is pasted.
+            rewrite, warming = self.rewrite, getattr(self, "warming", None)
+            ticket, self.next_ticket = self.next_ticket, self.next_ticket + 1
+        with self.turn:
+            self.turn.wait_for(lambda: self.serving == ticket)
+        try:
+            self.process(chunks, excess, rewrite, warming)
+        finally:
+            with self.turn:
+                self.serving += 1
+                self.turn.notify_all()
+
+    def process(self, chunks, excess, rewrite, warming):
+        """Transcribe one take, clean it up if asked, and paste it."""
         audio = self.np.concatenate(chunks)[:, 0] if chunks else []
         if excess:
             audio = audio[:-excess]
@@ -588,14 +613,15 @@ class Dictation:
         if not text:
             return
         self.last_take = (audio, text)  # saved takes keep Whisper's text, matching the audio
-        if self.rewrite:
+        if rewrite:
             t0 = time.time()
             # Say so only when the rewrite is slow (the model is still loading, usually).
             busy = []
             timer = threading.Timer(0.8, lambda: busy.append(
                 notify(f"✨ Rewriting ({current_mode()})…", persistent=True)))
             timer.start()
-            self.warming.join()
+            if warming:
+                warming.join()
             text = llm_cleanup(text, lang)
             timer.cancel()
             timer.join()
@@ -633,7 +659,8 @@ class Dictation:
             return
         self.last_save = time.monotonic()
         audio, text = take
-        os.makedirs(RECORDINGS, exist_ok=True)
+        os.makedirs(RECORDINGS, mode=0o700, exist_ok=True)
+        os.chmod(RECORDINGS, 0o700)  # voice data: only you can read it
         name = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + ".wav"
         with wave.open(os.path.join(RECORDINGS, name), "wb") as w:
             w.setnchannels(1)
@@ -657,15 +684,18 @@ class Dictation:
         # Some apps (e.g. terminals) paste the primary selection on Shift+Insert, so set both;
         # the Ctrl shortcuts always paste the clipboard.
         if self.kbd is None:
-            clipboard_set(text)
-            notify("📋 Copied; paste it with Ctrl+V")
+            if clipboard_set(text):
+                notify("📋 Copied; paste it with Ctrl+V")
+            else:
+                notify("Couldn't copy the transcript; find it under Recent transcripts in the settings menu")
             return
         paste_key = settings()["paste_key"]
         keys = [getattr(self.ec, k) for k in PASTE_KEYS[paste_key]]
         selections = ("clipboard", "primary") if paste_key == "shift+insert" else ("clipboard",)
         saved = {sel: clipboard_get(sel) for sel in selections}
-        for sel in saved:
-            clipboard_set(text, sel)
+        if not all(clipboard_set(text, sel) for sel in saved):  # pasting now would paste old text
+            notify("Couldn't copy the transcript; find it under Recent transcripts in the settings menu")
+            return
         time.sleep(0.05)
         ec, k = self.ec, self.kbd
         presses = [(c, 1) for c in keys] + [(c, 0) for c in reversed(keys)]
@@ -729,9 +759,11 @@ def model_downloaded(name):
     if DEVICE == "vulkan":
         from pywhispercpp.constants import MODELS_DIR
         return os.path.exists(os.path.join(MODELS_DIR, f"ggml-{name}.bin"))
-    from faster_whisper.utils import _MODELS
+    import faster_whisper.utils
     from huggingface_hub import try_to_load_from_cache
-    return isinstance(try_to_load_from_cache(_MODELS.get(name, name), "model.bin"), str)
+    # faster-whisper's name-to-repository table is private; without it, report "not downloaded".
+    repo = getattr(faster_whisper.utils, "_MODELS", {}).get(name, name)
+    return isinstance(try_to_load_from_cache(repo, "model.bin"), str)
 
 
 def load_whisper(name):
@@ -796,7 +828,12 @@ def clipboard_set(text, selection="clipboard"):
         cmd = ["xclip", "-selection", selection]
     else:
         cmd = ["wl-copy"] + (["--primary"] if selection == "primary" else [])
-    subprocess.run(cmd, input=text.encode(), check=True)
+    try:
+        subprocess.run(cmd, input=text.encode(), check=True, timeout=2)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print(f"clipboard: {e}", flush=True)
+        return False
 
 
 def dataset_size(meta):
@@ -870,7 +907,7 @@ def serve():
     while True:
         conn, _ = srv.accept()
         with conn:
-            cmd = conn.recv(64).decode().strip()
+            cmd = conn.recv(64).decode(errors="replace").strip()
         if cmd == "toggle":
             d.press()
         elif cmd == "rewrite":
