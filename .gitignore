@@ -10,3 +10,5 @@ PRODUCT.md
 .impeccable/
 dist/
 *.egg-info/
+muse_code_review_oct13.md
+uv.lock
