@@ -39,8 +39,8 @@ priority for the rest. Add variables to the `[Service]` section of
 | `ASR_SOUNDS` | `1` | `0` turns off the start and stop sounds |
 | `ASR_SOUND_VOLUME` | `40` | Sound volume, as a percent of the system volume |
 | `ASR_PASTE_KEY` | `shift+insert` | `shift+insert`, `ctrl+v` or `ctrl+shift+v` |
-| `ASR_REWRITE_MODEL` | `llama3.2` | Ollama model used by F3 |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama server used by F3 |
+| `ASR_REWRITE_MODEL` | `llama3.2` | Ollama model used for LLM cleanup |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama server used for LLM cleanup |
 
 Then apply the changes:
 
@@ -69,7 +69,7 @@ translate or garble the text.
 ## Replacements
 
 List fixed rewrites in `~/.config/tuxwhisper/replacements.txt`, one `spoken => written` rule per
-line. TuxWhisper applies them to the text before pasting, on F5 and F3, matching whole words
+line. TuxWhisper applies them to the text before pasting, with or without LLM cleanup, matching whole words
 in any case. `\n` inserts a line break, and a line-break rule also removes the punctuation
 Whisper puts around it.
 
@@ -80,7 +80,7 @@ tux whisper => TuxWhisper
 my email => you@example.com
 ```
 
-Like `vocab.txt`, the file is re-read on every recording. Saved recordings (F4) keep Whisper's original
+Like `vocab.txt`, the file is re-read on every recording. Saved recordings keep Whisper's original
 text, which matches the audio. Pick phrases you won't say for real: a `comma => ,` rule also
 fires when you mean the word.
 

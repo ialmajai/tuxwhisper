@@ -1,7 +1,7 @@
 # How it works
 
 ```text
- F5 / F3 / F4 ──▶ asr toggle|rewrite|save ──▶ Unix socket ──▶ asr serve (daemon)
+ keys ──────────▶ asr toggle|rewrite|save ──▶ Unix socket ──▶ asr serve (daemon)
                                                                  │
      mic ──▶ record ──▶ faster-whisper ──▶ (Ollama cleanup) ─────┤
                                                                  ▼
@@ -27,7 +27,7 @@ tuxwhisper toggle     # start / stop dictation
 tuxwhisper rewrite    # start / stop dictation with LLM cleanup
 tuxwhisper save       # save the last recording
 tuxwhisper settings   # open the settings menu
-tuxwhisper bind       # bind F5, F3, F4 and Alt+F9 on GNOME
+tuxwhisper bind       # bind the default keys on GNOME
 tuxwhisper serve      # run the daemon in the foreground (systemd does this at login)
 tuxwhisper setup      # install packages, service, shortcuts (same as ./install.sh)
 tuxwhisper uninstall  # remove what setup added (same as ./uninstall.sh)

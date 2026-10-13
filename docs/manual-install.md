@@ -13,35 +13,35 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## 0. Install system packages
 
-A compiler and headers to build the keyboard library, PortAudio for the microphone, clipboard
-tools, `zenity` for the settings menu, and `notify-send` plus the sound theme for the
-recording cues:
+PortAudio for the microphone, clipboard tools, `zenity` for the settings menu (`yad` adds hover
+help; openSUSE doesn't package it), and `notify-send` plus the sound theme for the recording
+cues:
 
 **Debian (Ubuntu uses the same packages):**
 
 ```bash
-sudo apt install gcc linux-libc-dev libportaudio2 \
-  xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop
+sudo apt install libportaudio2 \
+  xclip wl-clipboard zenity yad libnotify-bin sound-theme-freedesktop
 ```
 
 **Fedora:**
 
 ```bash
-sudo dnf install gcc kernel-headers portaudio \
-  xclip wl-clipboard zenity libnotify sound-theme-freedesktop
+sudo dnf install portaudio \
+  xclip wl-clipboard zenity yad libnotify sound-theme-freedesktop
 ```
 
 **Arch:**
 
 ```bash
-sudo pacman -S gcc linux-api-headers portaudio \
-  xclip wl-clipboard zenity libnotify sound-theme-freedesktop
+sudo pacman -S portaudio \
+  xclip wl-clipboard zenity yad libnotify sound-theme-freedesktop
 ```
 
 **openSUSE:**
 
 ```bash
-sudo zypper install gcc linux-glibc-devel portaudio \
+sudo zypper install portaudio \
   xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop
 ```
 
@@ -115,12 +115,14 @@ On GNOME, run this in the repo folder:
 ./asr bind
 ```
 
-It adds F5, F3, F4 and Alt+F9 as custom shortcuts. It keeps your other shortcuts, keeps any
+It binds the dictation, cleanup, save and settings keys as custom shortcuts (F5, F3, F4 and
+Alt+F9). It keeps your other shortcuts, keeps any
 key you already changed, and skips a key another shortcut uses. Change them later under
 **Keys** in the settings menu, or in Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts. KDE, Hyprland, Sway, i3: see
 [Other desktops](other-desktops.md).
 
-F5 and F3 replace page refresh and find-next in browsers and many editors. Ctrl+R and Ctrl+G
+The default dictation and cleanup keys, F5 and F3, replace page refresh and find-next in browsers
+and many editors. Ctrl+R and Ctrl+G
 still do those.
 
 To open the settings menu from your app grid, run this in the repo folder to add
@@ -133,10 +135,10 @@ sed "s|@DIR@|$PWD|" tuxwhisper-settings.desktop \
 
 ## 5. Try it
 
-Click into any text box, hold F5, wait for the start sound, speak, and release. Your words
+Click into any text box, hold the dictation key, wait for the start sound, speak, and release. Your words
 appear at the cursor. Nothing typed? See [Troubleshooting](troubleshooting.md).
 
-## 6. Optional: LLM cleanup (F3)
+## 6. Optional: LLM cleanup
 
 See [LLM cleanup](llm-cleanup.md#install).
 
@@ -153,5 +155,5 @@ sudo rm /etc/udev/rules.d/60-uinput.rules    # takes effect after a reboot
 ```
 
 Then remove the keyboard shortcuts and delete the repo folder. These stay until you delete
-them: settings and lists in `~/.config/tuxwhisper`, recordings you saved with F4 in
+them: settings and lists in `~/.config/tuxwhisper`, recordings you saved with the save key in
 `~/.local/share/tuxwhisper/recordings`, and the Whisper model in `~/.cache/huggingface/hub`.

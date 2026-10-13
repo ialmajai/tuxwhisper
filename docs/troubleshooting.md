@@ -57,12 +57,12 @@ TuxWhisper couldn't use the GPU or the CUDA libraries. Check that `nvidia-smi` w
 <details>
 <summary><b>CUDA out of memory</b></summary>
 
-Another program is using the GPU. Free some memory, or run Ollama for F3 on another machine
+Another program is using the GPU. Free some memory, or run Ollama for LLM cleanup on another machine
 with `OLLAMA_URL`.
 </details>
 
 <details>
-<summary><b>F3 pastes the raw transcript</b></summary>
+<summary><b>LLM cleanup pastes the raw transcript</b></summary>
 
 - **"Not enough GPU memory for LLM cleanup":** the cleanup model doesn't fit in free GPU
   memory, which is always the case in CPU mode. Close other GPU programs, pick a smaller model

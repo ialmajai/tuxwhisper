@@ -1,6 +1,6 @@
-# Saving recordings (F4)
+# Saving recordings
 
-F4 saves the most recent recording to `~/.local/share/tuxwhisper/recordings/`:
+The save key saves the most recent recording to `~/.local/share/tuxwhisper/recordings/`:
 
 ```text
 recordings/
@@ -18,8 +18,8 @@ This is the Hugging Face `audiofolder` layout, ready for fine-tuning a speech mo
 
 - The notification shows your progress, e.g. "💾 Saved (142 recordings, 14 min)". About an hour
   of audio is a good first target for fine-tuning.
-- You can save only the **latest** recording, and only once. Press F4 again and you get "Nothing
+- You can save only the **latest** recording, and only once. Press the save key again and you get "Nothing
   to save" until you dictate again.
-- The saved transcript is Whisper's **raw** output, even for F3 recordings, because that's what
-  matches the audio. F4 doesn't see corrections you make in the text box; edit
+- The saved transcript is Whisper's **raw** output, even for recordings with LLM cleanup, because that's what
+  matches the audio. Saving doesn't see corrections you make in the text box; edit
   `metadata.csv` instead.

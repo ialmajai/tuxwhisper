@@ -20,11 +20,11 @@ reaches a cloud service, and there's nothing to pay for.
   types your words about half a second after you release the key, with an NVIDIA GPU. AMD
   and Intel GPUs work through Vulkan.
 - **Types anywhere:** browsers, editors, terminals, on X11 and Wayland (including GNOME).
-- **LLM cleanup (optional):** F3 runs your words through a local [Ollama](https://ollama.com)
+- **LLM cleanup (optional):** the cleanup key runs your words through a local [Ollama](https://ollama.com)
   model (Meta's Llama 3.2 by default) that removes "um"s and fixes punctuation, or rewrites
   them as an email, bullet points or your own mode. The model must fit in the GPU memory of
-  the machine running Ollama; otherwise F3 pastes the raw transcript.
-- **Many languages:** dictate in any of Whisper's 100 languages. F3 replies in the language
+  the machine running Ollama; otherwise it pastes the raw transcript.
+- **Many languages:** dictate in any of Whisper's 100 languages. LLM cleanup replies in the language
   you spoke; Llama 3.2 is weak outside English, so [pick a stronger model](docs/llm-cleanup.md)
   for other languages.
 
@@ -40,12 +40,13 @@ Tested on GNOME (Wayland) with an NVIDIA GPU and in CPU mode, and on
 
 | Key | Action |
 |-----|--------|
-| **F5** | Tap to start, tap to stop, or hold to talk. The text is typed at your cursor. |
-| **F3** | Same as F5, with [LLM cleanup](docs/llm-cleanup.md). |
-| **F4** | [Save the last recording](docs/saving-takes.md) and its transcript for fine-tuning. |
-| **Alt+F9** | Open the [settings menu](docs/configuration.md#settings-menu). |
+| **Dictation key** | Tap to start, tap to stop, or hold to talk. The text is typed at your cursor. |
+| **Cleanup key** | The same, with [LLM cleanup](docs/llm-cleanup.md). |
+| **Save key** | [Save the last recording](docs/saving-takes.md) and its transcript for fine-tuning. |
+| **Settings key** | Open the [settings menu](docs/configuration.md#settings-menu). |
 
-Setup binds these keys on GNOME; change any of them under **Keys** in the settings menu.
+On GNOME, setup binds them to F5, F3, F4 and Alt+F9; change any of them under **Keys** in the
+settings menu.
 Wait for the "🎙 Recording…" notification and the start sound before speaking.
 
 ## Install
@@ -79,16 +80,16 @@ Prefer a git clone? `git clone https://github.com/ialmajai/tuxwhisper.git && cd 
 
 ### Try it
 
-Click into any text box, hold F5, wait for the start sound, speak, and release. Nothing
+Click into any text box, hold the dictation key, wait for the start sound, speak, and release. Nothing
 typed? See [Troubleshooting](docs/troubleshooting.md).
 
 > [!TIP]
-> F5 and F3 replace page refresh and find-next in browsers and many editors. Ctrl+R and Ctrl+G
-> still do those.
+> The default dictation and cleanup keys, F5 and F3, replace page refresh and find-next in
+> browsers and many editors. Ctrl+R and Ctrl+G still do those, or pick other keys under **Keys**.
 
-### Optional: LLM cleanup (F3)
+### Optional: LLM cleanup
 
-F3 needs [Ollama](https://ollama.com) and about 2 GB more GPU memory:
+The cleanup key needs [Ollama](https://ollama.com) and about 2 GB more GPU memory:
 [set it up](docs/llm-cleanup.md#install).
 
 ## Uninstall
@@ -103,8 +104,8 @@ downloaded models, listing where they are.
 ## Documentation
 
 - [Manual install](docs/manual-install.md)
-- [LLM cleanup (F3)](docs/llm-cleanup.md)
-- [Saving recordings for fine-tuning (F4)](docs/saving-takes.md)
+- [LLM cleanup](docs/llm-cleanup.md)
+- [Saving recordings for fine-tuning](docs/saving-takes.md)
 - [Configuration](docs/configuration.md): settings menu, custom vocabulary, replacements, GPU and CPU modes
 - [Other desktops](docs/other-desktops.md)
 - [How it works](docs/how-it-works.md)

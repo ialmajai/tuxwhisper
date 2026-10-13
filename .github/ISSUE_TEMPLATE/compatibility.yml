@@ -42,8 +42,8 @@ body:
         - label: Pastes in a browser
         - label: Pastes in a terminal
         - label: Clipboard is restored afterwards
-        - label: F3 LLM cleanup
-        - label: F4 saving takes
+        - label: LLM cleanup
+        - label: Saving recordings
   - type: textarea
     id: notes
     attributes:

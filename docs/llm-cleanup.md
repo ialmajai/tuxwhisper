@@ -1,6 +1,6 @@
-# LLM cleanup (F3)
+# LLM cleanup
 
-F3 sends the transcript to a local Ollama model (`llama3.2` by default). The model fixes
+The cleanup key sends the transcript to a local Ollama model (`llama3.2` by default). The model fixes
 punctuation and capitalization and removes filler words ("um", "uh", "like"), repeated words
 and false starts.
 
@@ -9,21 +9,21 @@ Whisper:  um so can you like uh explain how the the attention mechanism works
 Pasted:   So can you explain how the attention mechanism works?
 ```
 
-- **Questions stay questions.** Dictate "what is a closure" and F3 pastes "What is a
+- **Questions stay questions.** Dictate "what is a closure" and it pastes "What is a
   closure?" with no answer attached.
-- **Same language out:** F3 answers in the language you spoke, in every mode. `llama3.2` is
+- **Same language out:** it answers in the language you spoke, in every mode. `llama3.2` is
   weak outside English (it garbles Arabic, for example). For other languages, `ollama pull
   qwen3:8b` (about 5 GB of GPU memory) and pick it as the LLM model in the menu.
 - **Speed:** about 0.2–1 s once the model has loaded. The model unloads after 30 minutes
-  idle to free GPU memory, so the next F3 takes a few seconds longer.
+  idle to free GPU memory, so the next cleanup takes a few seconds longer.
 - **Always pastes something:** if Ollama is unreachable, or the model doesn't fit in free
-  GPU memory, F3 pastes the raw transcript and a notification tells you why.
-- **Not perfect:** it sometimes drops real words. Use F5 when the exact wording matters.
+  GPU memory, it pastes the raw transcript and a notification tells you why.
+- **Not perfect:** it sometimes drops real words. Use the dictation key when the exact wording matters.
 
 ## Install
 
-F3 needs about 2 GB of free GPU memory for Llama 3.2, on top of Whisper's 1.5 GB. Without
-that, or in CPU mode, F3 pastes the raw transcript. You can also point `OLLAMA_URL` at another
+LLM cleanup needs about 2 GB of free GPU memory for Llama 3.2, on top of Whisper's 1.5 GB. Without
+that, or in CPU mode, it pastes the raw transcript. You can also point `OLLAMA_URL` at another
 machine that has the memory (see the end of this page).
 
 Install [Ollama](https://docs.ollama.com/linux) and the cleanup model. The official install
@@ -36,7 +36,7 @@ ollama pull llama3.2
 
 ## Modes
 
-Pick what F3 does in the settings menu (**Cleanup mode**). The recording notification shows the
+Pick what the cleanup key does in the settings menu (**Cleanup mode**). The recording notification shows the
 active mode.
 
 | Mode | What you get |

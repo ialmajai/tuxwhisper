@@ -19,13 +19,17 @@ openSUSE), sets up the background service and, on GNOME, binds the keys. It says
 does and asks before anything that needs your password. On an AMD or Intel GPU, it builds the
 Vulkan engine for you.
 
-Then click into any text box, press F5, wait for the start sound, speak, and press F5 again.
+Then click into any text box, press the dictation key, wait for the start sound, speak, and press
+it again.
 
 | Key | Action |
 |-----|--------|
-| **F5** | Tap to start and stop, or hold to talk |
-| **F3** | Same, with local LLM cleanup |
-| **F4** | Save the last recording for fine-tuning |
-| **Alt+F9** | Settings menu |
+| **Dictation key** | Tap to start and stop, or hold to talk |
+| **Cleanup key** | The same, with local LLM cleanup |
+| **Save key** | Save the last recording for fine-tuning |
+| **Settings key** | Settings menu |
+
+On GNOME, setup binds them to F5, F3, F4 and Alt+F9; change them under **Keys** in the settings
+menu.
 
 Documentation, other desktops and troubleshooting: <https://github.com/ialmajai/tuxwhisper>

@@ -44,16 +44,17 @@ fi
 
 step "1/6  System packages"
 # A compiler and kernel headers build the keyboard library; PortAudio reads the microphone.
-# The rest are clipboard tools, the settings menu, notifications and the start/stop sounds.
+# The rest are clipboard tools, the settings menu (yad adds hover help; openSUSE lacks it),
+# notifications and the start/stop sounds.
 # CI installs these lists on each distro; keep docs/manual-install.md in sync.
 # shellcheck source=/dev/null
 . /etc/os-release 2>/dev/null || true
 case " ${ID:-} ${ID_LIKE:-} " in
-    *" debian "*|*" ubuntu "*) pm=(apt-get install -y) pkgs=(libportaudio2 xclip wl-clipboard zenity libnotify-bin sound-theme-freedesktop)
+    *" debian "*|*" ubuntu "*) pm=(apt-get install -y) pkgs=(libportaudio2 xclip wl-clipboard zenity yad libnotify-bin sound-theme-freedesktop)
         vulkan=(g++ cmake libvulkan-dev glslc spirv-headers glslang-tools mesa-vulkan-drivers) ;;
-    *" fedora "*) pm=(dnf install -y) pkgs=(portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop)
+    *" fedora "*) pm=(dnf install -y) pkgs=(portaudio xclip wl-clipboard zenity yad libnotify sound-theme-freedesktop)
         vulkan=(gcc-c++ cmake vulkan-loader-devel glslc spirv-headers-devel glslang mesa-vulkan-drivers) ;;
-    *" arch "*) pm=(pacman -S --needed --noconfirm) pkgs=(portaudio xclip wl-clipboard zenity libnotify sound-theme-freedesktop)
+    *" arch "*) pm=(pacman -S --needed --noconfirm) pkgs=(portaudio xclip wl-clipboard zenity yad libnotify sound-theme-freedesktop)
         vulkan=(gcc cmake vulkan-icd-loader vulkan-headers shaderc spirv-headers glslang vulkan-radeon vulkan-intel) ;;
     *" suse "*|*" opensuse "*) pm=(zypper -n install) pkgs=(portaudio xclip wl-clipboard zenity libnotify-tools sound-theme-freedesktop)
         vulkan=(gcc-c++ cmake vulkan-devel shaderc spirv-headers glslang-devel libvulkan_radeon libvulkan_intel) ;;
@@ -63,6 +64,7 @@ esac
 [ "$engine" = vulkan ] && pkgs+=("${vulkan[@]}")
 have_all() {
     { command -v xclip || command -v wl-copy; } && command -v zenity && command -v notify-send &&
+        { [[ " ${pkgs[*]} " != *" yad "* ]] || command -v yad; } &&
         [ -f /usr/share/sounds/freedesktop/stereo/device-added.oga ] &&
         { ldconfig -p 2>/dev/null || /sbin/ldconfig -p; } | grep libportaudio >/dev/null &&
         { [ "$engine" != vulkan ] || { command -v g++ && command -v cmake && command -v glslc &&
@@ -170,11 +172,12 @@ fi
 step "5/6  Keyboard shortcuts and app-grid launcher"
 if [[ "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]]; then
     "$CMD" bind | sed 's/^/  /'
-    note "F5 and F3 now replace page refresh and find-next in browsers; Ctrl+R and Ctrl+G still work."
+    note "Change keys under Keys in the settings menu. Defaults F5 and F3 replace page refresh and"
+    note "find-next in browsers; Ctrl+R and Ctrl+G still work."
 else
     note "Bind these in your desktop's shortcut settings (docs/other-desktops.md):"
-    note "  F5 -> \"$CMD\" toggle      F3 -> \"$CMD\" rewrite"
-    note "  F4 -> \"$CMD\" save        Alt+F9 -> \"$CMD\" settings"
+    note "  dictation: \"$CMD\" toggle     cleanup:  \"$CMD\" rewrite"
+    note "  save:      \"$CMD\" save       settings: \"$CMD\" settings"
 fi
 mkdir -p "$APPS_DIR"
 sed "s|@CMD@|$CMD|" tuxwhisper-settings.desktop > "$APPS_DIR/tuxwhisper-settings.desktop"
@@ -182,15 +185,15 @@ note "Added \"TuxWhisper Settings\" to your app grid."
 
 step "6/6  Loading the speech model"
 if [ "$service" = 0 ]; then
-    note "Skipped: start TuxWhisper from your window manager (step 4), then press F5 to dictate."
+    note "Skipped: start TuxWhisper from your window manager (step 4), then press your dictation key."
     exit 0
 fi
 note "The first start downloads it (about 1.5 GB; the CPU model is smaller). Later starts take about 15 s."
 for _ in $(seq 1 600); do
     log="$(journalctl --user -u tuxwhisper --since "$since" -o cat 2>/dev/null || true)"
     if grep -qx "ready" <<<"$log"; then
-        step "Done. Click into any text box, hold F5, wait for the start sound, speak, and release."
-        note "Settings: Alt+F9.  Optional LLM cleanup (F3): docs/llm-cleanup.md"
+        step "Done. Click into any text box, hold the dictation key, wait for the start sound, speak, and release."
+        note "Settings: the settings key, or \"TuxWhisper Settings\" in your apps.  LLM cleanup: docs/llm-cleanup.md"
         exit 0
     fi
     if ! systemctl --user is-active -q tuxwhisper && [ -n "$log" ]; then

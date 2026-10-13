@@ -1,19 +1,22 @@
 # Other desktops
 
-Bind these commands in your desktop's shortcut settings, using the full path to your clone:
+Bind these commands to keys of your choice in your desktop's shortcut settings. Installed from
+PyPI, the command is `~/.local/bin/tuxwhisper`; in a git clone, it's `~/tuxwhisper/asr`:
 
-| Key | Command |
+| Action | Command |
 |---|---|
-| F5 | `~/tuxwhisper/asr toggle` |
-| F3 | `~/tuxwhisper/asr rewrite` |
-| F4 | `~/tuxwhisper/asr save` |
-| Alt+F9 | `~/tuxwhisper/asr settings` |
+| Dictate | `~/.local/bin/tuxwhisper toggle` |
+| Dictate with LLM cleanup | `~/.local/bin/tuxwhisper rewrite` |
+| Save the last recording | `~/.local/bin/tuxwhisper save` |
+| Open the settings menu | `~/.local/bin/tuxwhisper settings` |
+
+On GNOME, setup binds them to F5, F3, F4 and Alt+F9; the examples below use F5 for dictation.
 
 Some desktops don't expand `~` in shortcut commands (GNOME's don't); write `/home/<you>/…` there.
 
 | Desktop | Binding | Hold to talk |
 |---|---|---|
-| GNOME | `./asr bind`, or Settings → Keyboard → Custom Shortcuts | ✅ Yes |
+| GNOME | `tuxwhisper setup` binds them; change them under **Keys** in the settings menu | ✅ Yes |
 | KDE Plasma | System Settings → Shortcuts → Add New → Command | ❔ Untested |
 | Hyprland | `binde = , F5, exec, ~/tuxwhisper/asr toggle` | ❔ Untested (`binde` repeats while held, so holding should work) |
 | Sway | `bindsym F5 exec ~/tuxwhisper/asr toggle` | ✅ Yes (tested on Sway 1.12) |
