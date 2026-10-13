@@ -59,17 +59,20 @@ No uv yet? Its official installer:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Then:
+Then install TuxWhisper from [PyPI](https://pypi.org/project/tuxwhisper/) and set it up:
 
 ```bash
-git clone https://github.com/ialmajai/tuxwhisper.git ~/tuxwhisper
-cd ~/tuxwhisper
-./install.sh
+uv tool install tuxwhisper        # NVIDIA GPU: uv tool install 'tuxwhisper[cuda]'
+tuxwhisper setup
 ```
 
-The installer says what each step does and asks before anything that needs your password.
-It's safe to run again. [Read it](install.sh) first if you like. It installs system packages
-on Debian, Ubuntu, Fedora, Arch and openSUSE; on other distros, use the manual install below.
+Setup says what each step does and asks before anything that needs your password. It installs
+the system packages on Debian, Ubuntu, Fedora, Arch and openSUSE, the background service, and on
+GNOME the keys. It's safe to run again; [read it](install.sh) first if you like. On other distros,
+use the manual install below.
+
+Prefer a git clone? `git clone https://github.com/ialmajai/tuxwhisper.git && cd tuxwhisper &&
+./install.sh` does the same.
 
 **Advanced:** [Manual install](docs/manual-install.md) runs every step by hand.
 [Other desktops](docs/other-desktops.md) covers KDE, Hyprland, Sway and i3.
@@ -91,7 +94,7 @@ F3 needs [Ollama](https://ollama.com) and about 2 GB more GPU memory:
 ## Uninstall
 
 ```bash
-./uninstall.sh
+tuxwhisper uninstall    # in a git clone: ./uninstall.sh
 ```
 
 It asks before removing the virtual keyboard rule, and keeps your settings, saved recordings and
