@@ -6,7 +6,7 @@ readme = "docs/pypi.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Ibrahim Almajai" }]
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.15"  # ctranslate2 (faster-whisper) has wheels up to 3.14
 keywords = ["dictation", "speech-to-text", "whisper", "wayland", "linux", "voice-typing"]
 classifiers = [
     "Operating System :: POSIX :: Linux",
