@@ -29,7 +29,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # pre: what the uv installer needs on a bare image
+          # pre: what the uv installer needs on a bare image. tries: attempts for the package
+          # steps; openSUSE's mirrors sometimes fail a refresh, so it retries.
           - image: fedora:latest
             pre: dnf install -y tar gzip
           - image: archlinux:latest
@@ -37,12 +38,21 @@ jobs:
           - image: debian:stable
             pre: apt-get update && apt-get install -y curl ca-certificates
           - image: opensuse/tumbleweed
-            pre: zypper -n install curl tar gzip gawk
+            pre: >-
+              for i in 1 2 3; do zypper -n refresh && zypper -n install curl tar gzip gawk && break;
+              [ $i = 3 ] && exit 1; echo "zypper failed, retrying in 30 s"; sleep 30; done
+            tries: 3
     container: ${{ matrix.image }}
     steps:
       - run: ${{ matrix.pre }}
       - uses: actions/checkout@v5
-      - run: bash install.sh --packages-only --yes
+      - run: |
+          n=${{ matrix.tries || 1 }}
+          for i in $(seq 1 "$n"); do
+            bash install.sh --packages-only --yes && break
+            [ "$i" = "$n" ] && exit 1
+            echo "package step failed, retrying in 30 s"; sleep 30
+          done
       - run: curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 sh
       - run: |
           export PATH="$HOME/.local/bin:$PATH"
