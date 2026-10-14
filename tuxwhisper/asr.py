@@ -228,7 +228,7 @@ def keys_menu():
                            if c.endswith((f"asr {cmd}", f"{APP} {cmd}"))), None) for cmd in KEY_ACTIONS}
         rows = [x for cmd, label in KEY_ACTIONS.items()
                 for x in (cmd, label, key_label(ours[cmd][1]) if ours[cmd] else "not bound")]
-        cmd = zenity("--list", "--title=Keys", "--width=420", "--height=300",
+        cmd = zenity("--list", "--title=Keys", *fit(("Action", "Key"), zip(rows[1::3], rows[2::3])),
                      "--text=Pick an action to change its key.", "--column=cmd", "--column=Action",
                      "--column=Key", "--hide-column=1", "--print-column=1",
                      "--ok-label=Change", "--cancel-label=Back", *rows)
@@ -1021,6 +1021,15 @@ def zenity(*args):
     return r.stdout.strip() if r.returncode == 0 else None
 
 
+def fit(headers, rows):
+    """--width/--height for a list dialog, sized to its longest visible cell in each column;
+    fixed sizes cut long values off."""
+    chars = sum(max(len(str(c)) for c in col) for col in zip(headers, *rows))
+    width = chars * 8 + 40 * len(headers) + 60
+    height = 36 * len(rows) + 220
+    return f"--width={min(max(width, 360), 1400)}", f"--height={min(max(height, 300), 800)}"
+
+
 def edit_list(path, title, help_text):
     """Edit a vocab/replacements file in a dialog; the file keeps its comments."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1037,7 +1046,7 @@ def edit_list(path, title, help_text):
 def pick(title, options, current):
     # A plain list, not --radiolist: there, clicking a row's text doesn't tick its button,
     # so Select silently returned the old value.
-    return zenity("--list", f"--title={title}", "--width=300", "--height=420",
+    return zenity("--list", f"--title={title}", *fit(("Current", "Value"), [("✓", o) for o in options]),
                   "--column=Current", "--column=Value", "--print-column=2",
                   *[x for o in options for x in ("✓" if o == current else "", o)])
 
@@ -1143,7 +1152,7 @@ def pick_asr_model(current):
     def state(n):
         return ", downloading" if n == pending else ", downloaded" if model_downloaded(n) else ""
     labels = {f"{n} ({size}{state(n)}): {about}": n for n, about, size in asr_models()}
-    picked = zenity("--list", "--title=Speech model", "--width=640", "--height=360",
+    picked = zenity("--list", "--title=Speech model", *fit(("Current", "Model"), [("✓", l) for l in labels]),
                     "--text=The model that turns your speech into text. Bigger is more accurate but slower.",
                     "--column=Current", "--column=Model", "--print-column=2",
                     *[x for label, n in labels.items() for x in ("✓" if n == current else "", label)])
@@ -1172,7 +1181,8 @@ def menu_choice(rows):
     if shutil.which("yad"):
         # yad hides only one column, so rows are told apart by their visible names.
         by_name = {name: key for key, name, _ in triples}
-        r = subprocess.run(["yad", "--list", "--title=TuxWhisper settings", "--width=520", "--height=460",
+        r = subprocess.run(["yad", "--list", "--title=TuxWhisper settings",
+                            *fit(("Setting", "Value"), [t[1:] for t in triples]),
                             "--center", text, "--column=Setting", "--column=Value", "--column=Help",
                             "--hide-column=3", "--tooltip-column=3", "--print-column=1",
                             "--button=Close:1", "--button=Select:0",
@@ -1180,7 +1190,8 @@ def menu_choice(rows):
                            capture_output=True, text=True)
         name = r.stdout.strip().split("|")[0]
         return by_name.get(name) if r.returncode == 0 else None
-    choice = zenity("--list", "--title=TuxWhisper settings", "--width=860", "--height=460", text,
+    choice = zenity("--list", "--title=TuxWhisper settings",
+                    *fit(("Setting", "Value", "What it does"), [(n, v, MENU_HELP[k]) for k, n, v in triples]), text,
                     "--column=key", "--column=Setting", "--column=Value", "--column=What it does",
                     "--hide-column=1", "--print-column=1", "--ok-label=Select", "--cancel-label=Close",
                     *[x for key, name, value in triples for x in (key, name, value, MENU_HELP[key])])
@@ -1326,7 +1337,7 @@ def settings_menu():
                 continue
             rows = [x for i, h in enumerate(items)
                     for x in (str(i), h["time"], h["text"].replace("\n", " ⏎ ")[:90])]
-            picked = zenity("--list", "--title=Recent transcripts", "--width=640", "--height=420",
+            picked = zenity("--list", "--title=Recent transcripts", *fit(("Time", "Text"), zip(rows[1::3], rows[2::3])),
                             "--text=Pick one to copy it to the clipboard.",
                             "--column=i", "--column=Time", "--column=Text",
                             "--hide-column=1", "--print-column=1", "--ok-label=Copy", *rows)
