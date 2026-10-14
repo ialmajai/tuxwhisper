@@ -56,4 +56,4 @@ packages = ["tuxwhisper"]
 
 [tool.hatch.build.targets.sdist]
 include = ["tuxwhisper", "install.sh", "uninstall.sh", "tuxwhisper.service",
-           "tuxwhisper-settings.desktop", "asr", "docs/pypi.md", "LICENSE", "README.md"]
+           "tuxwhisper-settings.desktop", "tuxwhisper.png", "asr", "docs/pypi.md", "LICENSE", "README.md"]

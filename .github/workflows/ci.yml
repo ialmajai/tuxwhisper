@@ -94,5 +94,5 @@ jobs:
           tuxwhisper setup --packages-only --yes
           tuxwhisper 2>&1 | grep -q "tuxwhisper setup"
           d=$(uv tool dir)/tuxwhisper/lib/python3*/site-packages/tuxwhisper/data
-          ls $d/install.sh $d/uninstall.sh $d/tuxwhisper.service $d/tuxwhisper-settings.desktop
+          ls $d/install.sh $d/uninstall.sh $d/tuxwhisper.service $d/tuxwhisper-settings.desktop $d/tuxwhisper.png
           $(uv tool dir)/tuxwhisper/bin/python -c "import faster_whisper, numpy, sounddevice, evdev"
