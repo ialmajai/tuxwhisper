@@ -132,7 +132,19 @@ class FakeModel:
         self.release_first = threading.Event()
         self.release_first.set()
 
+    is_loaded = True
+
+    def loaded(self):
+        return self.is_loaded
+
+    def unload(self):
+        self.is_loaded = False
+
+    def load(self):
+        self.is_loaded = True
+
     def detect_language(self, audio, **_):
+        assert self.is_loaded, "transcribing with the model unloaded"
         return ("en", 1.0)
 
     def transcribe(self, audio, **_):
@@ -150,6 +162,8 @@ def make_dictation(monkeypatch):
     d.sd = types.SimpleNamespace(InputStream=FakeStream)
     d.model = FakeModel()
     d.lock = threading.Lock()
+    d.model_lock = threading.Lock()
+    d.last_used = time.monotonic()
     d.turn = threading.Condition()
     d.next_ticket = d.serving = 0
     d.stream = None
@@ -220,3 +234,60 @@ def test_clipboard_set_survives_hang(monkeypatch):
         raise subprocess.TimeoutExpired("xclip", 2)
     monkeypatch.setattr(asr.subprocess, "run", hang)
     assert asr.clipboard_set("text") is False
+
+
+# --- memory -------------------------------------------------------------------------------
+
+def test_unload_settings_validate():
+    with open(asr.CONFIG, "w") as f:
+        f.write('asr_unload_minutes = -5\nllm_unload_minutes = "soon"\n')
+    s = asr.settings()
+    assert s["asr_unload_minutes"] == 30 and s["llm_unload_minutes"] == 30
+
+
+@pytest.mark.parametrize("minutes, keep_alive", [(30, "30m"), (0, "0m"), (-1, -1)])
+def test_llm_keep_alive(minutes, keep_alive):
+    with open(asr.CONFIG, "w") as f:
+        f.write(f"llm_unload_minutes = {minutes}\n")
+    assert asr.llm_keep_alive() == keep_alive
+
+
+def test_speech_model_unloads_when_idle_and_reloads_on_use(monkeypatch):
+    monkeypatch.setattr(asr, "DEVICE", "cuda")
+    with open(asr.CONFIG, "w") as f:
+        f.write("asr_unload_minutes = 5\n")
+    d = make_dictation(monkeypatch)
+    d.unload_if_idle()
+    assert d.model.loaded()                   # used just now: stays loaded
+    d.last_used -= 6 * 60
+    d.unload_if_idle()
+    assert not d.model.loaded()               # 6 min idle: freed
+    d.toggle()                                # the next take reloads it before transcribing
+    d.toggle()
+    assert d.model.loaded() and d.pasted == ["take1"]
+
+
+def test_speech_model_kept_when_never_or_cpu(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.last_used -= 120 * 60
+    monkeypatch.setattr(asr, "DEVICE", "cuda")
+    with open(asr.CONFIG, "w") as f:
+        f.write("asr_unload_minutes = 0\n")    # never
+    d.unload_if_idle()
+    assert d.model.loaded()
+    monkeypatch.setattr(asr, "DEVICE", "cpu")
+    with open(asr.CONFIG, "w") as f:
+        f.write("asr_unload_minutes = 5\n")    # no GPU memory to free on the CPU
+    d.unload_if_idle()
+    assert d.model.loaded()
+
+
+def test_no_unload_while_transcribing(monkeypatch):
+    monkeypatch.setattr(asr, "DEVICE", "cuda")
+    with open(asr.CONFIG, "w") as f:
+        f.write("asr_unload_minutes = 5\n")
+    d = make_dictation(monkeypatch)
+    d.last_used -= 6 * 60
+    with d.model_lock:                        # a take is being transcribed
+        d.unload_if_idle()
+    assert d.model.loaded()

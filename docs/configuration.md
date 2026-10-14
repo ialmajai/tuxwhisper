@@ -12,6 +12,9 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
   `Ctrl+Alt+D`; it takes effect at once. On GNOME only; other desktops set keys in their own
   settings ([Other desktops](other-desktops.md)).
 - Cleanup mode (Clean up, Email, Bullet points…), the LLM model, and a model per mode
+- Speech model in memory and LLM in memory: how long each stays on the GPU when idle (default
+  30 minutes), or always loaded. The speech model reloads in under a second from RAM, starting
+  as you press the key, so you rarely notice.
 - Speech model: Whisper models from tiny (fastest) to large-v3 (most accurate), with their
   download sizes. A downloaded model is used at once. A new one downloads in the background
   while you keep dictating with the current model, then TuxWhisper switches to it. If a model

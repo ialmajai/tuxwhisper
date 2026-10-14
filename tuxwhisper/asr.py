@@ -91,6 +91,8 @@ def settings():
     s = {"sounds": SOUNDS, "sound_volume": SOUND_VOLUME, "language": LANGUAGE or "",
          "paste_key": PASTE_KEY, "rewrite_model": REWRITE_MODEL, "mode": "Clean up",
          "asr_model": os.environ.get("ASR_MODEL", ""),
+         # Minutes idle before freeing GPU memory: speech model 0 = never, LLM -1 = never.
+         "asr_unload_minutes": 30, "llm_unload_minutes": 30,
          "mode_models": {}}
     s.update({k: v for k, v in read_config().items() if k in s})
     try:
@@ -101,6 +103,9 @@ def settings():
         s["paste_key"] = "shift+insert"
     if not isinstance(s["mode_models"], dict):
         s["mode_models"] = {}
+    for key, low in (("asr_unload_minutes", 0), ("llm_unload_minutes", -1)):
+        if not isinstance(s[key], int) or isinstance(s[key], bool) or s[key] < low:
+            s[key] = 30
     if s["language"] not in LANGUAGES:  # also catches a wrong type from a hand-edited config
         s["language"] = ""
     return s
@@ -384,6 +389,12 @@ def ollama(path, payload=None, timeout=30):
         return json.load(r)
 
 
+def llm_keep_alive():
+    """How long Ollama keeps the cleanup model after use: -1 forever, 0 unloads right away."""
+    minutes = settings()["llm_unload_minutes"]
+    return -1 if minutes < 0 else f"{minutes}m"
+
+
 def rewrite_model_on_gpu():
     """Load the rewrite model if needed; True if it sits entirely in GPU memory.
 
@@ -396,7 +407,7 @@ def rewrite_model_on_gpu():
     m = loaded()
     if m is None:  # an empty generate request just loads the model
         try:
-            ollama("/api/generate", {"model": model, "keep_alive": "30m",
+            ollama("/api/generate", {"model": model, "keep_alive": llm_keep_alive(),
                                      "options": OLLAMA_OPTIONS})
         except urllib.error.HTTPError as e:
             if b"out of memory" in e.read():
@@ -450,7 +461,7 @@ def llm_cleanup(text, lang):
             notify("Not enough GPU memory for LLM cleanup, pasted raw transcript")
             return text
         r = ollama("/api/chat", {
-            "model": mode_model(), "stream": False, "keep_alive": "30m", "think": False,
+            "model": mode_model(), "stream": False, "keep_alive": llm_keep_alive(), "think": False,
             "options": OLLAMA_OPTIONS,
             "format": {"type": "object", "properties": {"cleaned": {"type": "string"}},
                        "required": ["cleaned"]},
@@ -521,10 +532,13 @@ class Dictation:
         self.refresh_hint()
         self.chunks = []
         self.last_press = 0.0
+        self.last_used = time.monotonic()
+        self.model_lock = threading.Lock()  # held while the speech model is used, loaded or freed
         self.last_take = None  # (audio, text) of the latest transcription
         self.last_save = 0.0
         self.held = False
         threading.Thread(target=self._watch_release, daemon=True).start()
+        threading.Thread(target=self._watch_idle, daemon=True).start()
         print("ready", flush=True)
 
     # GNOME re-runs the shortcut on key auto-repeat (~every 0.1s here, after a 0.5s delay),
@@ -551,9 +565,37 @@ class Dictation:
                 cut_at = self.last_press + self.RELEASE_TAIL
                 threading.Thread(target=self.toggle, args=(cut_at,), daemon=True).start()
 
+    def _watch_idle(self):
+        """Free the speech model's GPU memory after the idle time set in the menu."""
+        while True:
+            time.sleep(15)
+            self.unload_if_idle()
+
+    def unload_if_idle(self):
+        minutes = settings()["asr_unload_minutes"]
+        if (minutes and DEVICE != "cpu" and self.stream is None
+                and time.monotonic() - self.last_used > minutes * 60
+                and self.model_lock.acquire(blocking=False)):  # not while one is transcribing
+            try:
+                if speech_loaded(self.model):
+                    speech_unload(self.model)
+                    print(f"speech model unloaded after {minutes} min idle", flush=True)
+            finally:
+                self.model_lock.release()
+
+    def ensure_model(self):
+        """Load the speech model back onto the GPU if it was freed (under a second from RAM)."""
+        with self.model_lock:
+            if not speech_loaded(self.model):
+                t0 = time.time()
+                speech_load(self.model)
+                print(f"speech model reloaded in {time.time() - t0:.2f}s", flush=True)
+
     def toggle(self, cut_at=None, rewrite=False):
         with self.lock:
             if self.stream is None:
+                self.last_used = time.monotonic()
+                threading.Thread(target=self.ensure_model, daemon=True).start()  # overlaps the speech
                 self.chunks = []
                 self.rewrite = rewrite  # mode is set by the key that started the take
                 if rewrite:  # a cold load takes seconds; overlap it with the speech
@@ -600,14 +642,17 @@ class Dictation:
             audio = audio[:-excess]
         if len(audio) < RATE * 0.3:  # too short to be speech; Whisper hallucinates on these
             return
-        t0 = time.time()
-        lang = settings()["language"] or self.model.detect_language(audio, vad_filter=True)[0]
-        # The English prompt and vocabulary make Whisper translate other languages into English.
-        english = lang == "en"
-        segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=True,
-                                            initial_prompt=PROMPT if english else None,
-                                            hotwords=vocab() if english else None)
-        text = " ".join(s.text.strip() for s in segments).strip()
+        self.ensure_model()
+        with self.model_lock:
+            t0 = time.time()
+            lang = settings()["language"] or self.model.detect_language(audio, vad_filter=True)[0]
+            # The English prompt and vocabulary make Whisper translate other languages into English.
+            english = lang == "en"
+            segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=True,
+                                                initial_prompt=PROMPT if english else None,
+                                                hotwords=vocab() if english else None)
+            text = " ".join(s.text.strip() for s in segments).strip()
+        self.last_used = time.monotonic()
         print(f"[{len(audio) / RATE:.1f}s audio (-{excess / RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
               flush=True)
         if not text:
@@ -709,6 +754,19 @@ class Dictation:
                 clipboard_set(old, sel)
 
 
+# Speech model memory: faster-whisper parks the model in RAM (CTranslate2); WhisperCpp frees it.
+def speech_loaded(model):
+    return model.loaded() if hasattr(model, "loaded") else model.model.model_is_loaded
+
+
+def speech_unload(model):
+    model.unload() if hasattr(model, "unload") else model.model.unload_model(to_cpu=True)
+
+
+def speech_load(model):
+    model.load() if hasattr(model, "loaded") else model.model.load_model()
+
+
 class WhisperCpp:
     """whisper.cpp on a Vulkan GPU (AMD, Intel or NVIDIA), called like faster-whisper's model."""
 
@@ -717,13 +775,20 @@ class WhisperCpp:
         from pywhispercpp.model import Model
         from pywhispercpp.utils import redirect_stderr
         self.quiet = lambda: redirect_stderr(to=None)  # whisper.cpp logs every call to stderr
-        self.model = Model(name, print_progress=False, print_realtime=False,
-                           redirect_whispercpp_logs_to=None)
+        self.load = lambda: setattr(self, "model", Model(name, print_progress=False, print_realtime=False,
+                                                         redirect_whispercpp_logs_to=None))
+        self.load()
         # Without VAD, silence comes out as "." or invented phrases, which would be pasted.
         self.vad_model = os.path.join(MODELS_DIR, os.path.basename(VAD_MODEL_URL))
         if not os.path.exists(self.vad_model):
             urllib.request.urlretrieve(VAD_MODEL_URL, self.vad_model + ".part")
             os.replace(self.vad_model + ".part", self.vad_model)
+
+    def loaded(self):
+        return self.model is not None
+
+    def unload(self):  # whisper.cpp can't park a model in RAM, so it reloads from disk later
+        self.model = None
 
     def detect_language(self, audio, **_):
         with self.quiet():
@@ -1122,6 +1187,13 @@ def menu_choice(rows):
     return choice.split("|")[0] if choice else None
 
 
+def unload_label(minutes, never):
+    """Menu wording for an idle-unload setting; never is the value that means "keep loaded"."""
+    if minutes == never or minutes < 0:
+        return "always loaded"
+    return "unload right after use" if minutes == 0 else f"unload after {minutes} min idle"
+
+
 MENU_HELP = {
     "sounds": "Beep when recording starts and stops",
     "sound_volume": "How loud the beeps are",
@@ -1132,6 +1204,8 @@ MENU_HELP = {
     "rewrite_model": "The Ollama model used for LLM cleanup",
     "mode_model": "A different LLM model for this cleanup mode only",
     "asr_model": "The Whisper model: bigger is more accurate, smaller is faster",
+    "asr_unload_minutes": "Free GPU memory when you haven't dictated for a while; reloads in under a second",
+    "llm_unload_minutes": "Free the cleanup model's GPU memory after a while; reloading takes a few seconds",
     "history": "Your last 20 transcripts; pick one to copy it again",
     "vocab": "Names and jargon Whisper should spell right (English)",
     "replacements": 'Spoken words to replace, e.g. "new line" with a line break',
@@ -1166,6 +1240,10 @@ def settings_menu():
                 "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as LLM model"),
                 "asr_model", "Speech model", (s["asr_model"] or default_asr_model().split("-whisper-")[-1])
                 + tag["asr_model"],
+                "asr_unload_minutes", "Speech model in memory", unload_label(s["asr_unload_minutes"], 0)
+                + tag["asr_unload_minutes"],
+                "llm_unload_minutes", "LLM in memory", unload_label(s["llm_unload_minutes"], -1)
+                + tag["llm_unload_minutes"],
                 "history", "Recent transcripts", f"{len(load_history())} this session",
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…",
@@ -1194,6 +1272,14 @@ def settings_menu():
             picked = pick("Paste key", list(PASTE_KEYS), s["paste_key"])
             if picked:
                 cfg["paste_key"] = picked
+        elif choice in ("asr_unload_minutes", "llm_unload_minutes"):
+            never = 0 if choice == "asr_unload_minutes" else -1
+            options = [-1, 5, 10, 30, 60] if never == 0 else [0, 5, 10, 30, 60, -1]
+            labels = {unload_label(m, never): m for m in options}
+            title = "Speech model in memory" if never == 0 else "LLM in memory"
+            picked = pick(title, list(labels), unload_label(s[choice], never))
+            if picked:
+                cfg[choice] = max(labels[picked], never)  # "always loaded" is stored as never
         elif choice == "asr_model":
             pick_asr_model(s["asr_model"])
             continue

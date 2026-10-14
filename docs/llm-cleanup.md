@@ -14,8 +14,9 @@ Pasted:   So can you explain how the attention mechanism works?
 - **Same language out:** it answers in the language you spoke, in every mode. `llama3.2` is
   weak outside English (it garbles Arabic, for example). For other languages, `ollama pull
   qwen3:8b` (about 5 GB of GPU memory) and pick it as the LLM model in the menu.
-- **Speed:** about 0.2–1 s once the model has loaded. The model unloads after 30 minutes
-  idle to free GPU memory, so the next cleanup takes a few seconds longer.
+- **Speed:** about 0.2–1 s once the model has loaded. By default the model unloads after 30
+  minutes idle to free GPU memory, so the next cleanup takes a few seconds longer; change it
+  under **LLM in memory** in the settings menu.
 - **Always pastes something:** if Ollama is unreachable, or the model doesn't fit in free
   GPU memory, it pastes the raw transcript and a notification tells you why.
 - **Not perfect:** it sometimes drops real words. Use the dictation key when the exact wording matters.
