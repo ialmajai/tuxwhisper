@@ -5,6 +5,7 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
 RULE=/etc/udev/rules.d/60-uinput.rules
 CMD="${TUXWHISPER_CMD:-$DIR/asr}"   # set by `tuxwhisper uninstall`
 PY="${TUXWHISPER_PY:-$DIR/.venv/bin/python}"
@@ -36,7 +37,7 @@ print(f"  Removed {len(paths) - len(keep)} keyboard shortcut(s).")
 EOF
 fi
 
-rm -f "$APPS_DIR/tuxwhisper-settings.desktop"
+rm -f "$APPS_DIR/tuxwhisper-settings.desktop" "$ICON_DIR/tuxwhisper.png"
 note "Removed the app-grid launcher."
 
 if [ -f "$RULE" ] && ask "Remove the virtual keyboard rule ($RULE)? Other tools such as ydotool may use it."; then

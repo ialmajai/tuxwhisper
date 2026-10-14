@@ -1025,6 +1025,8 @@ def have_yad():
     return shutil.which("yad") is not None
 
 
+# The app name GNOME matches to the launcher, so dialogs show its icon instead of yad's.
+YAD_APP = ["--name=tuxwhisper-settings", "--window-icon=tuxwhisper"]
 YAD_ICONS = {"--info": "dialog-information", "--error": "dialog-error", "--question": "dialog-question"}
 
 
@@ -1051,7 +1053,8 @@ def yad_args(args):
 def zenity(*args):
     """Show a zenity dialog, or the same dialog in yad when it's installed: yad opens about
     a second sooner than zenity 4."""
-    cmd = ["yad", "--center", *yad_args(args)] if have_yad() else ["zenity", *args]
+    args = [f"--title=🐧 {a.removeprefix('--title=')}" if a.startswith("--title=") else a for a in args]
+    cmd = ["yad", *YAD_APP, "--center", *yad_args(args)] if have_yad() else ["zenity", *args]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         return None
@@ -1221,7 +1224,7 @@ def menu_choice(rows):
     if shutil.which("yad"):
         # yad hides only one column, so rows are told apart by their visible names.
         by_name = {name: key for key, name, _ in triples}
-        r = subprocess.run(["yad", "--list", "--title=TuxWhisper settings",
+        r = subprocess.run(["yad", *YAD_APP, "--list", "--title=🐧 TuxWhisper settings",
                             *fit(("Setting", "Value"), [t[1:] for t in triples]),
                             "--center", text, "--column=Setting", "--column=Value", "--column=Help",
                             "--hide-column=3", "--tooltip-column=3", "--print-column=1",

@@ -15,6 +15,7 @@ PACKAGED="${TUXWHISPER_PACKAGED:-}"
 CMD="${TUXWHISPER_CMD:-$DIR/asr}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
 RULE=/etc/udev/rules.d/60-uinput.rules
 RULE_TEXT='KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"'
 YES=0 PACKAGES_ONLY=0 engine=
@@ -179,7 +180,8 @@ else
     note "  dictation: \"$CMD\" toggle     cleanup:  \"$CMD\" rewrite"
     note "  save:      \"$CMD\" save       settings: \"$CMD\" settings"
 fi
-mkdir -p "$APPS_DIR"
+mkdir -p "$APPS_DIR" "$ICON_DIR"
+cp tuxwhisper.png "$ICON_DIR/tuxwhisper.png"
 sed "s|@CMD@|$CMD|" tuxwhisper-settings.desktop > "$APPS_DIR/tuxwhisper-settings.desktop"
 note "Added \"TuxWhisper Settings\" to your app grid."
 

@@ -52,6 +52,7 @@ packages = ["tuxwhisper"]
 "uninstall.sh" = "tuxwhisper/data/uninstall.sh"
 "tuxwhisper.service" = "tuxwhisper/data/tuxwhisper.service"
 "tuxwhisper-settings.desktop" = "tuxwhisper/data/tuxwhisper-settings.desktop"
+"tuxwhisper.png" = "tuxwhisper/data/tuxwhisper.png"
 
 [tool.hatch.build.targets.sdist]
 include = ["tuxwhisper", "install.sh", "uninstall.sh", "tuxwhisper.service",
