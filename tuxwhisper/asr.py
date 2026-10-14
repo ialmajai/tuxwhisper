@@ -13,6 +13,7 @@ From a git clone, `./asr` runs the same commands.
 """
 import csv
 import datetime
+import functools
 import json
 import os
 import re
@@ -46,6 +47,12 @@ ASR_MODELS = [
     ("base", "Very fast, less accurate", "0.15 GB"),
     ("tiny", "Fastest, least accurate", "0.08 GB"),
 ]
+# Where faster-whisper downloads each menu model from, to check the cache without importing it.
+ASR_REPOS = {
+    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
+    **{n: f"Systran/faster-whisper-{n}" for n in ("large-v3", "medium", "small", "base", "tiny")},
+}
 # Silero voice activity detection for whisper.cpp; faster-whisper ships its own copy.
 VAD_MODEL_URL = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
 LANGUAGE = os.environ.get("ASR_LANGUAGE") or None  # e.g. "en"; None = auto-detect
@@ -824,11 +831,8 @@ def model_downloaded(name):
     if DEVICE == "vulkan":
         from pywhispercpp.constants import MODELS_DIR
         return os.path.exists(os.path.join(MODELS_DIR, f"ggml-{name}.bin"))
-    import faster_whisper.utils
     from huggingface_hub import try_to_load_from_cache
-    # faster-whisper's name-to-repository table is private; without it, report "not downloaded".
-    repo = getattr(faster_whisper.utils, "_MODELS", {}).get(name, name)
-    return isinstance(try_to_load_from_cache(repo, "model.bin"), str)
+    return isinstance(try_to_load_from_cache(ASR_REPOS.get(name, name), "model.bin"), str)
 
 
 def load_whisper(name):
@@ -1016,17 +1020,53 @@ LANGUAGES = {
 }
 
 
+@functools.cache
+def have_yad():
+    return shutil.which("yad") is not None
+
+
+YAD_ICONS = {"--info": "dialog-information", "--error": "dialog-error", "--question": "dialog-question"}
+
+
+def yad_args(args):
+    """zenity's options in yad's spelling: yad has no dialog-type flags or button-label options."""
+    out, ok, cancel = [], "OK", "Cancel"
+    for a in args:
+        opt, _, value = a.partition("=")
+        if opt == "--ok-label":
+            ok = value
+        elif opt == "--cancel-label":
+            cancel = value
+        elif opt in YAD_ICONS:
+            out.append(f"--image={YAD_ICONS[opt]}")
+        else:
+            out.append(a)
+    if "--info" in args or "--error" in args:
+        return [*out, f"--button={ok}:0"]
+    if "--question" in args:
+        return [*out, "--button=No:1", "--button=Yes:0"]
+    return [*out, f"--button={cancel}:1", f"--button={ok}:0"]
+
+
 def zenity(*args):
-    r = subprocess.run(["zenity", *args], capture_output=True, text=True)
-    return r.stdout.strip() if r.returncode == 0 else None
+    """Show a zenity dialog, or the same dialog in yad when it's installed: yad opens about
+    a second sooner than zenity 4."""
+    cmd = ["yad", "--center", *yad_args(args)] if have_yad() else ["zenity", *args]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    out = r.stdout.strip()
+    return out.removesuffix("|") if have_yad() and "--list" in args else out  # yad ends list rows with |
 
 
 def fit(headers, rows):
     """--width/--height for a list dialog, sized to its longest visible cell in each column;
-    fixed sizes cut long values off."""
+    fixed sizes cut long values off. zenity (GTK 4) pads columns and the dialog more than yad."""
+    rows = list(rows)
     chars = sum(max(len(str(c)) for c in col) for col in zip(headers, *rows))
-    width = chars * 8 + 40 * len(headers) + 60
-    height = 36 * len(rows) + 220
+    pad, row, extra = (20, 29, 170) if have_yad() else (50, 27, 250)
+    width = chars * 8 + pad * len(headers) + 60
+    height = row * len(rows) + extra
     return f"--width={min(max(width, 360), 1400)}", f"--height={min(max(height, 300), 800)}"
 
 

@@ -55,6 +55,21 @@ def test_key_suggestions_round_trip():
         assert asr.key_label(asr.parse_key(label)) == label
 
 
+
+def test_fit_sizes_list_dialogs():
+    rows = zip(["F5", "F3"], ["Dictation", "Cleanup"])  # callers pass iterators
+    width, height = asr.fit(("Key", "Action"), rows)
+    assert width.startswith("--width=") and height.startswith("--height=")
+    long_row = asr.fit(("Value",), [("x" * 120,)])[0]
+    assert int(long_row.split("=")[1]) > int(width.split("=")[1])  # long cells widen the dialog
+
+
+def test_yad_args_translate_zenity_options():
+    assert asr.yad_args(("--list", "--ok-label=Copy", "--column=A")) == [
+        "--list", "--column=A", "--button=Cancel:1", "--button=Copy:0"]
+    assert asr.yad_args(("--error", "--text=x")) == ["--image=dialog-error", "--text=x", "--button=OK:0"]
+    assert asr.yad_args(("--question", "--text=x"))[-2:] == ["--button=No:1", "--button=Yes:0"]
+
 # --- replacements ---------------------------------------------------------------------------
 
 def test_replacements(tmp_path):

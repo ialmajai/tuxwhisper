@@ -14,7 +14,7 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ## 0. Install system packages
 
 PortAudio for the microphone, clipboard tools, `zenity` for the settings menu (`yad` adds hover
-help; openSUSE doesn't package it), and `notify-send` plus the sound theme for the recording
+help and opens menus faster; openSUSE doesn't package it), and `notify-send` plus the sound theme for the recording
 cues:
 
 **Debian (Ubuntu uses the same packages):**
