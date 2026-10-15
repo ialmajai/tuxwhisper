@@ -11,7 +11,7 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
 - Keys: the key for each action. Pick from a list or type any combination, such as
   `Ctrl+Alt+D`; it takes effect at once. On GNOME only; other desktops set keys in their own
   settings ([Other desktops](other-desktops.md)).
-- Cleanup mode (Clean up, Email, Bullet points…), the LLM model, and a model per mode
+- Rewrite style (Clean up, Email, Bullet points…), the LLM model, and a model per style
 - Speech model in memory and LLM in memory: how long each stays on the GPU when idle (default
   30 minutes), or always loaded. The speech model reloads in under a second from RAM, starting
   as you press the key, so you rarely notice.
@@ -19,7 +19,7 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
   download sizes. A downloaded model is used at once. A new one downloads in the background
   while you keep dictating with the current model, then TuxWhisper switches to it. If a model
   won't load, TuxWhisper goes back to the default.
-- Vocabulary, replacements and custom cleanup modes
+- Vocabulary, replacements and custom rewrite styles
 - Recent transcripts: the last 20 this session; pick one to copy it again. TuxWhisper keeps
   them in `$XDG_RUNTIME_DIR`, which only you can read and which empties when you log out.
 

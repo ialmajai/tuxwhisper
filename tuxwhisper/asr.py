@@ -1363,14 +1363,14 @@ MENU_HELP = {
     "keys": "The keys for dictation, cleanup, saving and this menu",
     "mode": "What LLM cleanup does: clean up, fix grammar, email, bullet points…",
     "rewrite_model": "The Ollama model used for LLM cleanup",
-    "mode_model": "A different LLM model for this cleanup mode only",
+    "mode_model": "A different LLM model for this rewrite style only",
     "asr_model": "The Whisper model: bigger is more accurate, smaller is faster",
     "asr_unload_minutes": "Free GPU memory when you haven't dictated for a while; reloads in under a second",
     "llm_unload_minutes": "Free the cleanup model's GPU memory after a while; reloading takes a few seconds",
     "history": "Your last 20 transcripts; pick one to copy it again",
     "vocab": "Names and jargon Whisper should spell right (English)",
     "replacements": 'Spoken words to replace, e.g. "new line" with a line break',
-    "modes": "Your own cleanup modes, as Name => instruction",
+    "modes": "Your own rewrite styles, as Name => instruction",
 }
 
 
@@ -1396,7 +1396,7 @@ def settings_menu():
                 "language", "Language", LANGUAGES.get(s["language"], "auto-detect") + tag["language"],
                 "paste_key", "Paste key", s["paste_key"] + tag["paste_key"],
                 "keys", "Keys", keys_summary(),
-                "mode", "Cleanup mode", mode + tag["mode"],
+                "mode", "Rewrite style", mode + tag["mode"],
                 "rewrite_model", "LLM model (cleanup)", s["rewrite_model"] + tag["rewrite_model"],
                 "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as LLM model"),
                 "asr_model", "Speech model", (s["asr_model"] or default_asr_model().split("-whisper-")[-1])
@@ -1408,7 +1408,7 @@ def settings_menu():
                 "history", "Recent transcripts", f"{len(load_history())} this session",
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…",
-                "modes", "Custom cleanup modes", "Edit…"]
+                "modes", "Custom rewrite styles", "Edit…"]
         choice = menu_choice(rows)
         if not choice:
             return
@@ -1448,11 +1448,11 @@ def settings_menu():
             keys_menu()
             continue
         elif choice == "mode":
-            picked = pick("Cleanup mode", list(modes()), mode)
+            picked = pick("Rewrite style", list(modes()), mode)
             if picked:
                 cfg["mode"] = picked
         elif choice == "modes":
-            edit_list(MODES_FILE, "Custom cleanup modes",
+            edit_list(MODES_FILE, "Custom rewrite styles",
                       "# One mode per line: Name => instruction for the LLM, e.g.\n"
                       "# Tweet => Rewrite as a tweet under 280 characters.\n")
             continue
