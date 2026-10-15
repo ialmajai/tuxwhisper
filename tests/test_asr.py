@@ -12,25 +12,25 @@ import types
 import numpy as np
 import pytest
 
-from tuxwhisper import asr
+from tuxwhisper import daemon, desktop, engine, llm, menu, store
 
-real_add_history = asr.add_history  # the fixture below stubs it out for the dictation tests
+real_add_history = store.add_history  # the fixture below stubs it out for the dictation tests
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
     """Point every user file at a temp dir and silence desktop side effects."""
-    monkeypatch.setattr(asr, "CONFIG", str(tmp_path / "config.toml"))
-    monkeypatch.setattr(asr, "REPLACEMENTS", str(tmp_path / "replacements.txt"))
-    monkeypatch.setattr(asr, "VOCAB", str(tmp_path / "vocab.txt"))
-    monkeypatch.setattr(asr, "RECORDINGS", str(tmp_path / "recordings"))
-    monkeypatch.setattr(asr, "MODES_FILE", str(tmp_path / "modes.txt"))
+    monkeypatch.setattr(store, "CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setattr(store, "REPLACEMENTS", str(tmp_path / "replacements.txt"))
+    monkeypatch.setattr(store, "VOCAB", str(tmp_path / "vocab.txt"))
+    monkeypatch.setattr(store, "RECORDINGS", str(tmp_path / "recordings"))
+    monkeypatch.setattr(store, "MODES_FILE", str(tmp_path / "modes.txt"))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))  # history, retype job: never the real ones
     monkeypatch.delenv("ASR_MODEL", raising=False)
-    monkeypatch.setattr(asr, "sound", lambda name: None)
-    monkeypatch.setattr(asr, "close_notification", lambda nid: None)
-    monkeypatch.setattr(asr, "add_history", lambda text, **kw: None)
-    monkeypatch.setattr(asr, "notify", lambda msg, **kw: notified.append(msg))
+    monkeypatch.setattr(desktop, "sound", lambda name: None)
+    monkeypatch.setattr(desktop, "close_notification", lambda nid: None)
+    monkeypatch.setattr(store, "add_history", lambda text, **kw: None)
+    monkeypatch.setattr(desktop, "notify", lambda msg, **kw: notified.append(msg))
     notified.clear()
 
 
@@ -45,7 +45,7 @@ notified = []
     ("d", None), ("space", None), ("Hyper+X", None), ("F25", None), ("Ctrl+", None), ("", None),
 ])
 def test_parse_key(text, binding):
-    assert asr.parse_key(text) == binding
+    assert desktop.parse_key(text) == binding
 
 
 @pytest.mark.parametrize("binding, label", [
@@ -53,41 +53,41 @@ def test_parse_key(text, binding):
     ("F5", "F5"), ("<Super>space", "Super+Space"), ("", ""),
 ])
 def test_key_label(binding, label):
-    assert asr.key_label(binding) == label
+    assert desktop.key_label(binding) == label
 
 
 def test_key_suggestions_round_trip():
-    for label in asr.KEY_SUGGESTIONS:
-        assert asr.key_label(asr.parse_key(label)) == label
+    for label in desktop.KEY_SUGGESTIONS:
+        assert desktop.key_label(desktop.parse_key(label)) == label
 
 
 
 def test_fit_sizes_list_dialogs():
     rows = zip(["F5", "F3"], ["Dictation", "Cleanup"])  # callers pass iterators
-    width, height = asr.fit(("Key", "Action"), rows)
+    width, height = desktop.fit(("Key", "Action"), rows)
     assert width.startswith("--width=") and height.startswith("--height=")
-    long_row = asr.fit(("Value",), [("x" * 120,)])[0]
+    long_row = desktop.fit(("Value",), [("x" * 120,)])[0]
     assert int(long_row.split("=")[1]) > int(width.split("=")[1])  # long cells widen the dialog
 
 
 def test_yad_args_translate_zenity_options():
-    assert asr.yad_args(("--list", "--ok-label=Copy", "--column=A")) == [
+    assert desktop.yad_args(("--list", "--ok-label=Copy", "--column=A")) == [
         "--list", "--column=A", "--button=Cancel:1", "--button=Copy:0"]
-    assert asr.yad_args(("--error", "--text=x")) == ["--image=dialog-error", "--text=x", "--button=OK:0"]
-    assert asr.yad_args(("--question", "--text=x"))[-2:] == ["--button=No:1", "--button=Yes:0"]
+    assert desktop.yad_args(("--error", "--text=x")) == ["--image=dialog-error", "--text=x", "--button=OK:0"]
+    assert desktop.yad_args(("--question", "--text=x"))[-2:] == ["--button=No:1", "--button=Yes:0"]
 
 # --- replacements ---------------------------------------------------------------------------
 
 def test_replacements(tmp_path):
     (tmp_path / "replacements.txt").write_text(
         "# comment => ignored\nnew line => \\n\ncomma => ,\ntux whisper => TuxWhisper\n")
-    assert asr.apply_replacements("Hello. New line. World.") == "Hello.\nWorld."
-    assert asr.apply_replacements("I like tux whisper") == "I like TuxWhisper"
-    assert asr.apply_replacements("commander") == "commander"  # whole words only
+    assert store.apply_replacements("Hello. New line. World.") == "Hello.\nWorld."
+    assert store.apply_replacements("I like tux whisper") == "I like TuxWhisper"
+    assert store.apply_replacements("commander") == "commander"  # whole words only
 
 
 def test_replacements_missing_file():
-    assert asr.apply_replacements("unchanged") == "unchanged"
+    assert store.apply_replacements("unchanged") == "unchanged"
 
 
 # --- settings -------------------------------------------------------------------------------
@@ -95,15 +95,15 @@ def test_replacements_missing_file():
 def test_toml_value_round_trips():
     cfg = {"sounds": True, "sound_volume": 57, "language": "", "mode": 'Say "hi"',
            "mode_models": {"Email": "qwen3:8b", 'My "q" mode': "x"}}
-    asr.save_settings(cfg)
-    with open(asr.CONFIG, "rb") as f:
+    store.save_settings(cfg)
+    with open(store.CONFIG, "rb") as f:
         assert tomllib.load(f) == cfg
 
 
 def test_settings_reject_bad_values():
-    with open(asr.CONFIG, "w") as f:
+    with open(store.CONFIG, "w") as f:
         f.write('sound_volume = "loud"\npaste_key = "alt+v"\nlanguage = 7\nmode_models = "x"\n')
-    s = asr.settings()
+    s = store.settings()
     assert s["sound_volume"] == 40
     assert s["paste_key"] == "shift+insert"
     assert s["language"] == ""  # a wrong-typed language would reach Whisper
@@ -111,15 +111,15 @@ def test_settings_reject_bad_values():
 
 
 def test_settings_clamp_volume():
-    with open(asr.CONFIG, "w") as f:
+    with open(store.CONFIG, "w") as f:
         f.write("sound_volume = 250\n")
-    assert asr.settings()["sound_volume"] == 100
+    assert store.settings()["sound_volume"] == 100
 
 
 def test_bad_env_volume_does_not_crash_import(tmp_path):
     env = dict(os.environ, ASR_SOUND_VOLUME="abc", XDG_CONFIG_HOME=str(tmp_path))
-    r = subprocess.run([sys.executable, "-c", "import tuxwhisper.asr as a; print(a.settings()['sound_volume'])"],
-                       env=env, capture_output=True, text=True)
+    code = "import tuxwhisper.asr; from tuxwhisper import store; print(store.settings()['sound_volume'])"
+    r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "40"
 
@@ -135,7 +135,7 @@ class FakeStream:
     def start(self):
         if FakeStream.fail_start:
             raise OSError("Device unavailable")
-        self.callback(np.full((asr.RATE, 1), 0.1, dtype=np.float32))  # one second of "audio"
+        self.callback(np.full((store.RATE, 1), 0.1, dtype=np.float32))  # one second of "audio"
 
     def stop(self):
         pass
@@ -178,29 +178,12 @@ class FakeModel:
 
 
 def make_dictation(monkeypatch):
-    d = object.__new__(asr.Dictation)
-    d.np = np
-    d.sd = types.SimpleNamespace(InputStream=FakeStream)
-    d.model = FakeModel()
-    d.fallback_from = None
-    d.last_memory_notice = 0.0
-    d.lock = threading.Lock()
-    d.model_lock = threading.Lock()
-    d.last_used = time.monotonic()
-    d.turn = threading.Condition()
-    d.next_ticket = d.serving = 0
-    d.stream = None
-    d.indicator = None
-    d.hint = None
-    d.chunks = []
-    d.last_take = None
-    d.last_save = 0.0
-    d.last_clip_warning = -asr.CLIP_WARN_EVERY
+    d = daemon.Dictation(FakeModel(), types.SimpleNamespace(InputStream=FakeStream), kbd=None, ec=None)
     d.pasted = []
     d.paste = lambda text: d.pasted.append(text.strip()) or True
     d.refresh_hint = lambda: None
-    monkeypatch.setattr(asr, "warm_rewrite_model", lambda: None)
-    monkeypatch.setattr(asr, "llm_cleanup", lambda text, lang: f"CLEANED:{text}")
+    monkeypatch.setattr(llm, "warm_rewrite_model", lambda: None)
+    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang: f"CLEANED:{text}")
     FakeStream.fail_start = False
     return d
 
@@ -237,9 +220,9 @@ def test_microphone_failure_does_not_wedge(monkeypatch):
 
 def test_saved_recordings_are_private(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.last_take = (np.zeros(asr.RATE, dtype=np.float32), "hello")
+    d.last_take = (np.zeros(store.RATE, dtype=np.float32), "hello")
     d.save()
-    mode = stat.S_IMODE(os.stat(asr.RECORDINGS).st_mode)
+    mode = stat.S_IMODE(os.stat(store.RECORDINGS).st_mode)
     assert mode == 0o700
 
 
@@ -248,36 +231,36 @@ def test_saved_recordings_are_private(monkeypatch):
 def test_clipboard_set_survives_missing_tool(monkeypatch):
     def missing(*a, **kw):
         raise FileNotFoundError("wl-copy")
-    monkeypatch.setattr(asr.subprocess, "run", missing)
-    assert asr.clipboard_set("text") is False
+    monkeypatch.setattr(desktop.subprocess, "run", missing)
+    assert desktop.clipboard_set("text") is False
 
 
 def test_clipboard_set_survives_hang(monkeypatch):
     def hang(*a, **kw):
         raise subprocess.TimeoutExpired("xclip", 2)
-    monkeypatch.setattr(asr.subprocess, "run", hang)
-    assert asr.clipboard_set("text") is False
+    monkeypatch.setattr(desktop.subprocess, "run", hang)
+    assert desktop.clipboard_set("text") is False
 
 
 # --- memory -------------------------------------------------------------------------------
 
 def test_unload_settings_validate():
-    with open(asr.CONFIG, "w") as f:
+    with open(store.CONFIG, "w") as f:
         f.write('asr_unload_minutes = -5\nllm_unload_minutes = "soon"\n')
-    s = asr.settings()
+    s = store.settings()
     assert s["asr_unload_minutes"] == 30 and s["llm_unload_minutes"] == 30
 
 
 @pytest.mark.parametrize("minutes, keep_alive", [(30, "30m"), (0, "0m"), (-1, -1)])
 def test_llm_keep_alive(minutes, keep_alive):
-    with open(asr.CONFIG, "w") as f:
+    with open(store.CONFIG, "w") as f:
         f.write(f"llm_unload_minutes = {minutes}\n")
-    assert asr.llm_keep_alive() == keep_alive
+    assert llm.llm_keep_alive() == keep_alive
 
 
 def test_speech_model_unloads_when_idle_and_reloads_on_use(monkeypatch):
-    monkeypatch.setattr(asr, "DEVICE", "cuda")
-    with open(asr.CONFIG, "w") as f:
+    monkeypatch.setattr(engine, "DEVICE", "cuda")
+    with open(store.CONFIG, "w") as f:
         f.write("asr_unload_minutes = 5\n")
     d = make_dictation(monkeypatch)
     d.unload_if_idle()
@@ -293,21 +276,21 @@ def test_speech_model_unloads_when_idle_and_reloads_on_use(monkeypatch):
 def test_speech_model_kept_when_never_or_cpu(monkeypatch):
     d = make_dictation(monkeypatch)
     d.last_used -= 120 * 60
-    monkeypatch.setattr(asr, "DEVICE", "cuda")
-    with open(asr.CONFIG, "w") as f:
+    monkeypatch.setattr(engine, "DEVICE", "cuda")
+    with open(store.CONFIG, "w") as f:
         f.write("asr_unload_minutes = 0\n")    # never
     d.unload_if_idle()
     assert d.model.loaded()
-    monkeypatch.setattr(asr, "DEVICE", "cpu")
-    with open(asr.CONFIG, "w") as f:
+    monkeypatch.setattr(engine, "DEVICE", "cpu")
+    with open(store.CONFIG, "w") as f:
         f.write("asr_unload_minutes = 5\n")    # no GPU memory to free on the CPU
     d.unload_if_idle()
     assert d.model.loaded()
 
 
 def test_no_unload_while_transcribing(monkeypatch):
-    monkeypatch.setattr(asr, "DEVICE", "cuda")
-    with open(asr.CONFIG, "w") as f:
+    monkeypatch.setattr(engine, "DEVICE", "cuda")
+    with open(store.CONFIG, "w") as f:
         f.write("asr_unload_minutes = 5\n")
     d = make_dictation(monkeypatch)
     d.last_used -= 6 * 60
@@ -329,15 +312,15 @@ class OOMModel(FakeModel):
 def fake_gpu(monkeypatch, free_gb, loads):
     """Pretend the GPU has free_gb free: bigger models fail to load as out of memory. Models
     that load are appended to loads."""
-    monkeypatch.setattr(asr, "DEVICE", "cuda")
-    monkeypatch.setattr(asr, "free_gpu_gb", lambda: free_gb[0])
-    monkeypatch.setattr(asr, "model_downloaded", lambda name: True)
+    monkeypatch.setattr(engine, "DEVICE", "cuda")
+    monkeypatch.setattr(engine, "free_gpu_gb", lambda: free_gb[0])
+    monkeypatch.setattr(engine, "model_downloaded", lambda name: True)
     def load(name):
-        if asr.model_size(name) > free_gb[0]:
+        if engine.model_size(name) > free_gb[0]:
             raise RuntimeError("CUDA failed with error out of memory")
         loads.append(name)
         return FakeModel()
-    monkeypatch.setattr(asr, "load_whisper", load)
+    monkeypatch.setattr(engine, "load_whisper", load)
 
 
 @pytest.mark.parametrize("free, expected, tried", [
@@ -350,7 +333,7 @@ def fake_gpu(monkeypatch, free_gb, loads):
 def test_load_smaller_tries_each_smaller_model_largest_first(monkeypatch, free, expected, tried):
     fake_gpu(monkeypatch, [free], [])
     names = []
-    found = asr.load_smaller("large-v3-turbo", names)
+    found = engine.load_smaller("large-v3-turbo", names)
     assert (found[1] if found else None) == expected
     assert names == tried
 
@@ -358,9 +341,9 @@ def test_load_smaller_tries_each_smaller_model_largest_first(monkeypatch, free, 
 def test_load_smaller_uses_english_only_models_only_for_english(monkeypatch):
     loads = []
     fake_gpu(monkeypatch, [3.0], loads)
-    assert asr.load_smaller("large-v3")[1] == "large-v3-turbo"
-    asr.save_settings({"language": "en"})
-    assert asr.load_smaller("large-v3-turbo")[1] == "distil-large-v3.5"
+    assert engine.load_smaller("large-v3")[1] == "large-v3-turbo"
+    store.save_settings({"language": "en"})
+    assert engine.load_smaller("large-v3-turbo")[1] == "distil-large-v3.5"
 
 
 def test_reload_out_of_memory_falls_back_and_still_pastes(monkeypatch):
@@ -395,7 +378,7 @@ def test_switches_back_when_memory_frees(monkeypatch):
     d.toggle()
     free[0] = 4.0
     d.restore_preferred_model()  # the idle thread does this between takes
-    assert loads == ["small", asr.asr_model()]
+    assert loads == ["small", engine.asr_model()]
     assert d.fallback_from is None
     assert any("Back to large-v3-turbo" in n for n in notified)
 
@@ -403,13 +386,13 @@ def test_switches_back_when_memory_frees(monkeypatch):
 def test_startup_out_of_memory_falls_back(monkeypatch):
     loads = []
     fake_gpu(monkeypatch, [1.2], loads)
-    _, replaced = asr.load_model()
+    _, replaced = engine.load_model()
     assert loads == ["small"] and replaced == "large-v3-turbo"
 
 
 def test_startup_with_no_room_waits_instead_of_exiting(monkeypatch):
     fake_gpu(monkeypatch, [0.05], [])
-    assert asr.load_model() == (None, "large-v3-turbo")
+    assert engine.load_model() == (None, "large-v3-turbo")
     assert notified == ["Not enough GPU memory to dictate"]
 
 
@@ -442,75 +425,78 @@ def test_take_loads_a_model_once_there_is_room(monkeypatch):
     ("i actually liked the first version", False),
 ])
 def test_self_correction_rule_only_for_correction_cues(text, cued):
-    assert (asr.SELF_CORRECTION in asr.rewrite_task(text)) is cued
-    assert asr.rewrite_task(text).startswith(asr.modes()[asr.current_mode()])
+    assert (llm.SELF_CORRECTION in llm.rewrite_task(text)) is cued
+    assert llm.rewrite_task(text).startswith(llm.modes()[llm.current_mode()])
 
 
 # --- correcting the last transcript ----------------------------------------------------------
 
 def test_suggest_learning_names_get_rules_and_vocabulary():
-    got = asr.suggest_learning("I use tux whisper daily.", "I use TuxWhisper daily.")
+    got = menu.suggest_learning("I use tux whisper daily.", "I use TuxWhisper daily.")
     assert ("rule", "tux whisper", "TuxWhisper", True) in got
     assert ("vocab", "TuxWhisper", "TuxWhisper", True) in got
 
 
 def test_suggest_learning_plain_words_start_unticked():
-    assert asr.suggest_learning("we need two copies", "we need three copies") == [
+    assert menu.suggest_learning("we need two copies", "we need three copies") == [
         ("rule", "two", "three", False)]
 
 
 def test_suggest_learning_skips_rewrites_punctuation_and_known_words():
-    assert asr.suggest_learning("Hello, world", "Hello world.") == []
-    assert asr.suggest_learning("one two three four five six", "a b c d e f") == []
-    got = asr.suggest_learning("ask kubernetes", "ask Kubernetes", ["Kubernetes"])
+    assert menu.suggest_learning("Hello, world", "Hello world.") == []
+    assert menu.suggest_learning("one two three four five six", "a b c d e f") == []
+    got = menu.suggest_learning("ask kubernetes", "ask Kubernetes", ["Kubernetes"])
     assert got == [("rule", "kubernetes", "Kubernetes", True)]
 
 
 def fake_dialogs(monkeypatch, edited, ticked):
-    """zenity: the text box returns edited; the checklist returns the ticked row indexes."""
+    """zenity: the text box returns edited; the checklist ticks the rows whose label contains
+    one of the ticked strings, and returns their indexes."""
     shown = []
     def dialog(*args):
         shown.append(args)
         if "--text-info" in args:
             return edited
-        if "--checklist" in args:
-            return " ".join(str(i) for i in ticked)
+        if "--checklist" in args:  # rows (tick, index, label) follow the options
+            rows = args[next(i for i, a in enumerate(args) if not a.startswith("-")):]
+            return " ".join(i for i, label in zip(rows[1::3], rows[2::3]) if any(t in label for t in ticked))
         return None
-    monkeypatch.setattr(asr, "zenity", dialog)
+    monkeypatch.setattr(desktop, "zenity", dialog)
     copied = []
-    monkeypatch.setattr(asr, "clipboard_set", lambda text, *a: copied.append(text) or True)
+    monkeypatch.setattr(desktop, "clipboard_set", lambda text, *a: copied.append(text) or True)
     return shown, copied
 
 
 def test_correct_last_copies_fix_and_learns_ticked_items(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     real_add_history("I use tux whisper daily.")
-    _, copied = fake_dialogs(monkeypatch, "I use TuxWhisper daily.", [0, 1])
-    asr.correct_last()
+    _, copied = fake_dialogs(monkeypatch, "I use TuxWhisper daily.",
+                             ['"tux whisper" as "TuxWhisper"', 'Add "TuxWhisper" to the vocabulary'])
+    menu.correct_last()
     assert copied == ["I use TuxWhisper daily."]
-    assert asr.load_history()[-1]["text"] == "I use TuxWhisper daily."
-    assert asr.apply_replacements("tux whisper rocks") == "TuxWhisper rocks"
-    assert asr.vocab() == "TuxWhisper"
+    assert store.load_history()[-1]["text"] == "I use TuxWhisper daily."
+    assert store.apply_replacements("tux whisper rocks") == "TuxWhisper rocks"
+    assert store.vocab() == "TuxWhisper"
 
 
 def test_correct_last_unchanged_does_nothing(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     real_add_history("Fine as it is.")
     shown, copied = fake_dialogs(monkeypatch, "Fine as it is.", [])
-    asr.correct_last()
+    menu.correct_last()
     assert copied == [] and len(shown) == 1
 
 
 def test_correct_last_fixes_the_saved_recording(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    os.makedirs(asr.RECORDINGS)
-    with open(os.path.join(asr.RECORDINGS, "metadata.csv"), "w") as f:
+    os.makedirs(store.RECORDINGS)
+    with open(os.path.join(store.RECORDINGS, "metadata.csv"), "w") as f:
         f.write("file_name,transcription\na.wav,first take\nb.wav,send it to jon\n")
     real_add_history("send it to jon")
-    asr.mark_last_saved("b.wav")
-    fake_dialogs(monkeypatch, "send it to John", [2])  # 0: "jon" rule, 1: "John" vocabulary, 2: recording
-    asr.correct_last()
-    with open(os.path.join(asr.RECORDINGS, "metadata.csv")) as f:
+    store.mark_last_saved("b.wav")
+    fake_dialogs(monkeypatch, "send it to John", ["saved recording"])  # not the "jon" rule or vocabulary
+    menu.correct_last()
+    with open(os.path.join(store.RECORDINGS, "metadata.csv")) as f:
         assert f.read().splitlines() == ["file_name,transcription", "a.wav,first take",
                                          "b.wav,send it to John"]
 
@@ -518,9 +504,9 @@ def test_correct_last_fixes_the_saved_recording(monkeypatch, tmp_path):
 def test_correct_last_never_offers_to_fix_a_rewritten_take(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     real_add_history("Dear team, the build failed.", rewritten=True)
-    asr.mark_last_saved("c.wav")
+    store.mark_last_saved("c.wav")
     shown, _ = fake_dialogs(monkeypatch, "Dear team, the build passed.", [])
-    asr.correct_last()
+    menu.correct_last()
     assert not any("saved recording" in a for args in shown for a in args)
 
 
@@ -538,54 +524,54 @@ class FakeKeyboard:
 
 def test_retype_erases_the_dictation_and_pastes_the_fix(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    monkeypatch.setattr(asr.time, "sleep", lambda s: None)
+    monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
     d = make_dictation(monkeypatch)
     d.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
     d.kbd = FakeKeyboard()
-    with open(asr.retype_path(), "w") as f:
+    with open(store.retype_path(), "w") as f:
         f.write('{"delete": 6, "text": "Hello"}')
     assert d.retype()
     assert d.kbd.keys == [14] * 6 and d.pasted == ["Hello"]
-    assert not os.path.exists(asr.retype_path())
+    assert not os.path.exists(store.retype_path())
 
 
 def test_correct_last_replaces_in_place_when_the_daemon_can(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     real_add_history("send it to jon", typed=True)
     jobs = []
-    def daemon(cmd):
-        with open(asr.retype_path()) as f:
+    def fake_request(cmd):
+        with open(store.retype_path()) as f:
             jobs.append(f.read())
         return "ok"
-    monkeypatch.setattr(asr, "request", daemon)
+    monkeypatch.setattr(daemon, "request", fake_request)
     _, copied = fake_dialogs(monkeypatch, "send it to John", [])
-    asr.correct_last()
+    menu.correct_last()
     assert copied == []  # typed in place, so nothing to paste by hand
     assert jobs == ['{"delete": 15, "text": "send it to John"}']  # 14 characters plus the space
     assert notified[-1] == "✏️ Replaced the dictated text"
 
 
 def test_typed_length_counts_characters_not_accents():
-    assert asr.typed_length("café") == 4
-    assert asr.typed_length("café") == 4
+    assert daemon.typed_length("café") == 4
+    assert daemon.typed_length("café") == 4
 
 
 # --- robustness ------------------------------------------------------------------------------
 
 def test_settings_with_emoji_and_control_characters_round_trip():
-    asr.save_settings({"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"}, "x": "a\x7fb"})
-    assert asr.read_config() == {"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"}, "x": "a\x7fb"}
+    store.save_settings({"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"}, "x": "a\x7fb"})
+    assert store.read_config() == {"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"}, "x": "a\x7fb"}
 
 
 def test_unreadable_settings_are_reported_and_kept(monkeypatch):
-    monkeypatch.delattr(asr.read_config, "warned", raising=False)
-    with open(asr.CONFIG, "w") as f:
+    monkeypatch.delattr(store.read_config, "warned", raising=False)
+    with open(store.CONFIG, "w") as f:
         f.write('mode = "unterminated\n')
-    assert asr.read_config() == {}
+    assert store.read_config() == {}
     assert notified == ["Settings file is unreadable; using defaults"]
-    asr.save_settings({"sounds": False})
-    kept = [n for n in os.listdir(os.path.dirname(asr.CONFIG)) if ".unreadable-" in n]
-    assert len(kept) == 1 and asr.read_config() == {"sounds": False}
+    store.save_settings({"sounds": False})
+    kept = [n for n in os.listdir(os.path.dirname(store.CONFIG)) if ".unreadable-" in n]
+    assert len(kept) == 1 and store.read_config() == {"sounds": False}
 
 
 def test_failed_take_is_reported_and_the_next_one_works(monkeypatch):
@@ -617,11 +603,11 @@ def test_mic_error_on_stop_does_not_wedge(monkeypatch):
 
 def test_list_rows_starting_with_a_dash_are_not_options(monkeypatch):
     cmds = []
-    monkeypatch.setattr(asr.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or types.SimpleNamespace(
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or types.SimpleNamespace(
         returncode=1, stdout=""))
     for yad in (True, False):
-        monkeypatch.setattr(asr, "have_yad", lambda y=yad: y)
-        asr.zenity("--list", "--column=i", "--column=Text", "--ok-label=Copy", "0", "- Buy milk")
+        monkeypatch.setattr(desktop, "have_yad", lambda y=yad: y)
+        desktop.zenity("--list", "--column=i", "--column=Text", "--ok-label=Copy", "0", "- Buy milk")
     for cmd in cmds:
         assert cmd[-3:] == ["--", "0", "- Buy milk"]
         assert not any(a.startswith("--button") for a in cmd[cmd.index("--"):])
@@ -630,68 +616,68 @@ def test_list_rows_starting_with_a_dash_are_not_options(monkeypatch):
 @pytest.mark.parametrize("typed, age, expected", [
     (True, 0, True),                          # fresh and typed: replace in place
     (False, 0, False),                        # only copied (paste failed): never erase
-    (True, asr.RETYPE_WITHIN + 1, False),     # too old: the cursor has probably moved
+    (True, menu.RETYPE_WITHIN + 1, False),     # too old: the cursor has probably moved
 ])
 def test_correct_last_retypes_only_a_fresh_typed_dictation(monkeypatch, typed, age, expected):
     real_add_history("send it to jon", typed=typed)
-    items = asr.load_history()
+    items = store.load_history()
     items[-1]["at"] -= age
-    asr.save_history(items)
+    store.save_history(items)
     asked = []
-    monkeypatch.setattr(asr, "request", lambda cmd: asked.append(cmd) or "ok")
+    monkeypatch.setattr(daemon, "request", lambda cmd: asked.append(cmd) or "ok")
     _, copied = fake_dialogs(monkeypatch, "send it to John", [])
-    asr.correct_last()
+    menu.correct_last()
     assert bool(asked) is expected and bool(copied) is not expected
 
 
 def test_retype_refuses_while_a_take_is_in_flight(monkeypatch):
-    monkeypatch.setattr(asr.time, "sleep", lambda s: None)
+    monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
     d = make_dictation(monkeypatch)
     d.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
     d.kbd = FakeKeyboard()
     d.next_ticket = 1  # a take stopped but isn't pasted yet
-    with open(asr.retype_path(), "w") as f:
+    with open(store.retype_path(), "w") as f:
         f.write('{"delete": 6, "text": "Hello"}')
     assert not d.retype() and d.kbd.keys == []
 
 
 def test_history_records_whether_the_take_was_typed(monkeypatch):
     d = make_dictation(monkeypatch)
-    monkeypatch.setattr(asr, "add_history", real_add_history)
+    monkeypatch.setattr(store, "add_history", real_add_history)
     d.paste = lambda text: False  # e.g. the clipboard couldn't be set
     d.toggle()
     d.toggle()
-    assert asr.load_history()[-1]["typed"] is False
+    assert store.load_history()[-1]["typed"] is False
 
 
 # --- files shared by the daemon and the menu -------------------------------------------------
 
 def test_update_settings_keeps_a_change_made_elsewhere_meanwhile():
-    asr.save_settings({"sounds": True})
-    stale = asr.read_config()                      # the menu read this...
-    asr.update_settings({"asr_model": "small"})    # ...then a download switched the model
+    store.save_settings({"sounds": True})
+    stale = store.read_config()                      # the menu read this...
+    store.update_settings({"asr_model": "small"})    # ...then a download switched the model
     stale["sounds"] = False
-    asr.update_settings({k: v for k, v in stale.items() if v is False})
-    assert asr.read_config() == {"sounds": False, "asr_model": "small"}
+    store.update_settings({k: v for k, v in stale.items() if v is False})
+    assert store.read_config() == {"sounds": False, "asr_model": "small"}
 
 
 def test_correction_keeps_takes_dictated_while_its_dialog_was_open(monkeypatch):
     real_add_history("send it to jon")
     fake_dialogs(monkeypatch, "send it to John", [])
-    dialog = asr.zenity
+    dialog = desktop.zenity
     def slow_dialog(*args):
         if "--text-info" in args:
             real_add_history("a new take")  # the daemon pastes another take meanwhile
         return dialog(*args)
-    monkeypatch.setattr(asr, "zenity", slow_dialog)
-    asr.correct_last()
-    assert [h["text"] for h in asr.load_history()] == ["send it to John", "a new take"]
+    monkeypatch.setattr(desktop, "zenity", slow_dialog)
+    menu.correct_last()
+    assert [h["text"] for h in store.load_history()] == ["send it to John", "a new take"]
 
 
 def test_atomic_write_leaves_no_temporary_files(tmp_path):
     path = str(tmp_path / "sub" / "f.txt")
-    asr.atomic_write(path, "one")
-    asr.atomic_write(path, "two")
+    store.atomic_write(path, "one")
+    store.atomic_write(path, "two")
     with open(path) as f:
         assert f.read() == "two"
     assert os.listdir(tmp_path / "sub") == ["f.txt"]
@@ -701,19 +687,19 @@ def test_atomic_write_leaves_no_temporary_files(tmp_path):
 
 @pytest.mark.parametrize("out, window", [("uint32 500\n", 0.7), ("uint32 900\n", 1.1), ("", 0.7)])
 def test_repeat_window_follows_the_desktop_repeat_delay(monkeypatch, out, window):
-    monkeypatch.setattr(asr.subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout=out))
-    assert asr.repeat_window() == pytest.approx(window)
+    monkeypatch.setattr(daemon.subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout=out))
+    assert daemon.repeat_window() == pytest.approx(window)
 
 
 def test_stop_before_recording_notice_closes_it(monkeypatch):
     d = make_dictation(monkeypatch)
     closed = []
-    monkeypatch.setattr(asr, "close_notification", lambda nid: closed.append(nid))
+    monkeypatch.setattr(desktop, "close_notification", lambda nid: closed.append(nid))
     def slow_notify(msg, **kw):
         if kw.get("persistent"):
             d.toggle()  # the take stops while the notice is still being shown
             return "42"
-    monkeypatch.setattr(asr, "notify", slow_notify)
+    monkeypatch.setattr(desktop, "notify", slow_notify)
     d.toggle()
     assert "42" in closed and d.indicator is None
 
@@ -741,12 +727,12 @@ def test_no_model_switch_while_recording(monkeypatch):
     ("'unbalanced", False),
 ])
 def test_runs_command_matches_only_our_program(command, ours):
-    assert asr.runs_command(command, "toggle") is ours
+    assert desktop.runs_command(command, "toggle") is ours
 
 
 def test_settings_shortcut_label_matches_the_keys_menu(monkeypatch):
-    monkeypatch.setattr(asr, "gnome_shortcuts", lambda: {"/p/": ("<Control><Alt>d", "/x/asr settings")})
-    assert asr.settings_shortcut() == "Ctrl+Alt+D"
+    monkeypatch.setattr(desktop, "gnome_shortcuts", lambda: {"/p/": ("<Control><Alt>d", "/x/asr settings")})
+    assert desktop.settings_shortcut() == "Ctrl+Alt+D"
 
 
 def test_download_verified_refuses_a_wrong_checksum(monkeypatch, tmp_path):
@@ -756,10 +742,10 @@ def test_download_verified_refuses_a_wrong_checksum(monkeypatch, tmp_path):
 
         def __exit__(self, *a):
             pass
-    monkeypatch.setattr(asr.urllib.request, "urlopen", lambda url, timeout: Resp(b"model"))
-    good = asr.hashlib.sha256(b"model").hexdigest()
-    asr.download_verified("http://x", str(tmp_path / "ok.bin"), good)
+    monkeypatch.setattr(engine.urllib.request, "urlopen", lambda url, timeout: Resp(b"model"))
+    good = engine.hashlib.sha256(b"model").hexdigest()
+    engine.download_verified("http://x", str(tmp_path / "ok.bin"), good)
     assert (tmp_path / "ok.bin").read_bytes() == b"model"
     with pytest.raises(OSError):
-        asr.download_verified("http://x", str(tmp_path / "bad.bin"), "0" * 64)
+        engine.download_verified("http://x", str(tmp_path / "bad.bin"), "0" * 64)
     assert not (tmp_path / "bad.bin").exists()

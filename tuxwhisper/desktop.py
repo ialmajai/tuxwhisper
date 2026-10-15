@@ -1,0 +1,311 @@
+"""Desktop integration: notifications, sounds, the clipboard, GNOME shortcuts and dialogs."""
+import functools
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
+
+from tuxwhisper import store
+
+
+def notify(msg, persistent=False, body=None):
+    """Show a desktop notification. persistent=True keeps it on screen until
+    close_notification() is called with the returned ID."""
+    extra = [body] if body else []
+    if not shutil.which("notify-send"):  # notifications are optional
+        print(msg, flush=True)
+        return None
+    if persistent:
+        try:
+            r = subprocess.run(["notify-send", "-a", store.APP, "-u", "critical", "-p",
+                                "-h", "boolean:transient:true", msg, *extra],
+                               capture_output=True, text=True, timeout=2)
+            nid = r.stdout.strip() or None
+            track_notification(nid, open_=True)
+            return nid
+        except subprocess.TimeoutExpired:
+            return None
+    subprocess.Popen(["notify-send", "-a", store.APP, "-t", "6000" if body else "1500",
+                      "-h", "boolean:transient:true", msg, *extra],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return None
+
+
+def settings_shortcut():
+    """The GNOME shortcut bound to the settings command, e.g. "Alt+F9", or None."""
+    ours = our_shortcut(gnome_shortcuts() or {}, "settings")
+    return key_label(ours[1]) if ours else None
+
+
+GNOME_KEYS = {"toggle": "F5", "rewrite": "F3", "save": "F4", "correct": "F6", "settings": "<Alt>F9"}
+KEY_ACTIONS = {"toggle": "Dictate", "rewrite": "Dictate with LLM cleanup",
+               "save": "Save the last recording", "settings": "Open this settings menu",
+               "correct": "Correct the last transcript"}
+KEY_SUGGESTIONS = ["F5", "F3", "F4", "F6", "F7", "F8", "F9", "F10", "F12", "Alt+F9",
+                   "Ctrl+Alt+D", "Super+H"]
+MEDIA_KEYS = "org.gnome.settings-daemon.plugins.media-keys"
+
+
+def key_label(binding):
+    """GNOME's "<Control><Alt>d" as "Ctrl+Alt+D"."""
+    mods, key = re.match(r"((?:<\w+>)*)(.*)", binding).groups()
+    mods = re.sub(r"<(\w+)>", r"\1+", mods).replace("Primary+", "Ctrl+").replace("Control+", "Ctrl+")
+    return mods + key[:1].upper() + key[1:]
+
+
+def parse_key(text):
+    """"Ctrl+Alt+D" or "F6" as GNOME's "<Control><Alt>d" / "F6"; None if it isn't a usable key."""
+    *mods, key = [part.strip() for part in text.split("+")]
+    names = {"ctrl": "<Control>", "control": "<Control>", "alt": "<Alt>", "shift": "<Shift>",
+             "super": "<Super>"}
+    special = {"space": "space", "insert": "Insert", "home": "Home", "end": "End", "pause": "Pause",
+               "print": "Print", "menu": "Menu"}
+    if any(m.lower() not in names for m in mods):
+        return None
+    if re.fullmatch(r"[Ff]([1-9]|1[0-9]|2[0-4])", key):
+        key = key.upper()
+    elif re.fullmatch(r"[A-Za-z0-9]", key) or key.lower() in special:
+        if not mods:  # a bare letter or space would stop you typing it
+            return None
+        key = special.get(key.lower(), key.lower())
+    else:
+        return None
+    return "".join(names[m.lower()] for m in mods) + key
+
+
+def gnome_shortcuts():
+    """Every GNOME custom shortcut as {path: (binding, command)}, or None when not on GNOME."""
+    def get(*args):
+        r = subprocess.run(["gsettings", "get", *args], capture_output=True, text=True, timeout=5)
+        if r.returncode:
+            raise FileNotFoundError(r.stderr)
+        return r.stdout.strip()
+    try:
+        paths = re.findall(r"'([^']+)'", get(MEDIA_KEYS, "custom-keybindings"))
+        return {p: tuple(get(f"{MEDIA_KEYS}.custom-keybinding:{p}", k).strip("'") for k in ("binding", "command"))
+                for p in paths}
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+
+def runs_command(command, cmd):
+    """Whether a shortcut's command line runs TuxWhisper's cmd: `<path>/asr cmd` from a git
+    clone or `<path>/tuxwhisper cmd` when installed, paths quoted or not. Exact, so a shortcut
+    running some other program whose name merely ends in "asr" isn't mistaken for ours."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return len(words) == 2 and os.path.basename(words[0]) in ("asr", store.APP) and words[1] == cmd
+
+
+def our_shortcut(shortcuts, cmd):
+    """(path, binding) of the shortcut running cmd, from gnome_shortcuts(), or None."""
+    return next(((p, b) for p, (b, c) in shortcuts.items() if runs_command(c, cmd)), None)
+
+
+def set_shortcut(cmd, binding, path, paths):
+    """Point TuxWhisper's shortcut for cmd at binding, creating the shortcut if needed; its path."""
+    def gs(*args):
+        subprocess.run(["gsettings", "set", *args], check=True, timeout=5)
+    if path is None:
+        path = f"/{MEDIA_KEYS.replace('.', '/')}/custom-keybindings/tuxwhisper-{cmd}/"
+        while path in paths:
+            path = path[:-1] + "-1/"
+        gs(f"{MEDIA_KEYS}.custom-keybinding:{path}", "name", f"TuxWhisper {cmd}")
+        gs(f"{MEDIA_KEYS}.custom-keybinding:{path}", "command", f"{shlex.quote(store.command_path())} {cmd}")
+        gs(MEDIA_KEYS, "custom-keybindings", str([*paths, path]))
+    gs(f"{MEDIA_KEYS}.custom-keybinding:{path}", "binding", binding)
+    return path
+
+
+def bind_gnome():
+    """Add GNOME custom shortcuts for the default keys, keeping any the user already changed."""
+    shortcuts = gnome_shortcuts()
+    if shortcuts is None:
+        sys.exit("GNOME's gsettings not found; bind the keys by hand (see docs/other-desktops.md).")
+    paths, cmd_path = list(shortcuts), shlex.quote(store.command_path())
+    for cmd, key in GNOME_KEYS.items():
+        ours = our_shortcut(shortcuts, cmd)
+        if ours:  # keep the key the user chose; only update the path, in case the repo moved
+            subprocess.run(["gsettings", "set", f"{MEDIA_KEYS}.custom-keybinding:{ours[0]}", "command",
+                            f"{cmd_path} {cmd}"], check=True, timeout=5)
+            print(f"{key_label(ours[1]):7} {cmd_path} {cmd} (already bound)")
+            continue
+        taken = next((c for b, c in shortcuts.values() if b == key), None)
+        if taken:
+            print(f"{key_label(key):7} skipped: already runs {taken}. Bind {cmd_path} {cmd} to another key.")
+            continue
+        paths.append(set_shortcut(cmd, key, None, paths))
+        print(f"{key_label(key):7} {cmd_path} {cmd}")
+
+
+def sound(name):
+    """Play a freedesktop theme sound; silently skipped if no player or file is found."""
+    path = f"/usr/share/sounds/freedesktop/stereo/{name}.oga"
+    volume = store.settings()["sound_volume"] / 100
+    if shutil.which("pw-play"):
+        cmd = ["pw-play", f"--volume={volume}", path]
+    elif shutil.which("paplay"):
+        cmd = ["paplay", f"--volume={int(volume * 65536)}", path]
+    else:
+        return
+    if store.settings()["sounds"] and os.path.exists(path):
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def open_notifications_path():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    return os.path.join(runtime, f"{store.APP}-notifications") if runtime else None
+
+
+_notifications_lock = threading.Lock()
+
+
+def track_notification(nid, open_):
+    """Remember which persistent notifications are on screen, so a daemon that died while one
+    was open can close it on its next start (GNOME keeps them, even on the lock screen)."""
+    path = open_notifications_path()
+    if not nid or not path:
+        return
+    with _notifications_lock:
+        try:
+            with open(path) as f:
+                ids = set(f.read().split())
+        except FileNotFoundError:
+            ids = set()
+        ids = ids | {nid} if open_ else ids - {nid}
+        with open(path, "w") as f:
+            f.write("\n".join(sorted(ids)))
+
+
+def close_stale_notifications():
+    path = open_notifications_path()
+    try:
+        with open(path) as f:
+            for nid in f.read().split():
+                close_notification(nid)
+    except (FileNotFoundError, TypeError):
+        pass
+
+
+def close_notification(nid):
+    track_notification(nid, open_=False)
+    if nid and shutil.which("gdbus"):
+        subprocess.Popen(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+                          "--object-path", "/org/freedesktop/Notifications",
+                          "--method", "org.freedesktop.Notifications.CloseNotification", nid],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# xclip works on X11 and on Wayland desktops with XWayland (GNOME, KDE, most others);
+# wl-clipboard covers Wayland sessions without XWayland.
+USE_XCLIP = bool(os.environ.get("DISPLAY") and shutil.which("xclip"))
+
+
+def clipboard_get(selection="clipboard"):
+    """Text in the clipboard or primary selection, or None if empty or not text (e.g. an image)."""
+    if USE_XCLIP:
+        cmd = ["xclip", "-selection", selection, "-o", "-t", "UTF8_STRING"]
+    else:
+        cmd = ["wl-paste", "--no-newline", "--type", "text"] + (["--primary"] if selection == "primary" else [])
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=1)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    return r.stdout.decode(errors="replace") if r.returncode == 0 else None
+
+
+def clipboard_set(text, selection="clipboard"):
+    if USE_XCLIP:
+        cmd = ["xclip", "-selection", selection]
+    else:
+        cmd = ["wl-copy"] + (["--primary"] if selection == "primary" else [])
+    try:
+        subprocess.run(cmd, input=text.encode(), check=True, timeout=2)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print(f"clipboard: {e}", flush=True)
+        return False
+
+
+@functools.cache
+def have_yad():
+    return shutil.which("yad") is not None
+
+
+# The app name GNOME matches to the launcher, so dialogs show its icon instead of yad's.
+YAD_APP = ["--name=tuxwhisper-settings", "--window-icon=tuxwhisper"]
+YAD_ICONS = {"--info": "dialog-information", "--error": "dialog-error", "--question": "dialog-question"}
+
+
+def yad_args(args):
+    """zenity's options in yad's spelling: yad has no dialog-type flags or button-label options."""
+    out, ok, cancel = [], "OK", "Cancel"
+    for a in args:
+        opt, _, value = a.partition("=")
+        if opt == "--ok-label":
+            ok = value
+        elif opt == "--cancel-label":
+            cancel = value
+        elif opt in YAD_ICONS:
+            out.append(f"--image={YAD_ICONS[opt]}")
+        else:
+            out.append(a)
+    if "--info" in args or "--error" in args:
+        return [*out, f"--button={ok}:0"]
+    if "--question" in args:
+        return [*out, "--button=No:1", "--button=Yes:0"]
+    return [*out, f"--button={cancel}:1", f"--button={ok}:0"]
+
+
+def zenity(*args):
+    """Show a zenity dialog, or the same dialog in yad when it's installed: yad opens about
+    a second sooner than zenity 4."""
+    args = [f"--title=🐧 {a.removeprefix('--title=')}" if a.startswith("--title=") else a for a in args]
+    rows = []
+    if "--list" in args:  # rows follow the options; "--" keeps a row like "- item" from reading as one
+        first_row = next((i for i, a in enumerate(args) if not a.startswith("-")), len(args))
+        args, rows = args[:first_row], ["--", *args[first_row:]]
+    cmd = ["yad", *YAD_APP, "--center", *yad_args(args)] if have_yad() else ["zenity", *args]
+    cmd += rows
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        return None
+    out = r.stdout.strip()
+    return out.removesuffix("|") if have_yad() and "--list" in args else out  # yad ends list rows with |
+
+
+def fit(headers, rows):
+    """--width/--height for a list dialog, sized to its longest visible cell in each column;
+    fixed sizes cut long values off. zenity (GTK 4) pads columns and the dialog more than yad."""
+    rows = list(rows)
+    chars = sum(max(len(str(c)) for c in col) for col in zip(headers, *rows))
+    pad, row, extra = (20, 29, 170) if have_yad() else (50, 27, 250)
+    width = chars * 8 + pad * len(headers) + 60
+    height = row * len(rows) + extra
+    return f"--width={min(max(width, 360), 1400)}", f"--height={min(max(height, 300), 800)}"
+
+
+def edit_list(path, title, help_text):
+    """Edit a vocab/replacements file in a dialog; the file keeps its comments."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write(help_text)
+    text = zenity("--text-info", "--editable", f"--filename={path}", f"--title={title}",
+                  "--width=520", "--height=420", "--ok-label=Save")
+    if text is not None:
+        with open(path, "w") as f:
+            f.write(text + "\n")
+
+
+def pick(title, options, current):
+    # A plain list, not --radiolist: there, clicking a row's text doesn't tick its button,
+    # so Select silently returned the old value.
+    return zenity("--list", f"--title={title}", *fit(("Current", "Value"), [("✓", o) for o in options]),
+                  "--column=Current", "--column=Value", "--print-column=2",
+                  *[x for o in options for x in ("✓" if o == current else "", o)])
