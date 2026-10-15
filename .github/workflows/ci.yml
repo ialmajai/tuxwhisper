@@ -7,12 +7,17 @@ on:
 
 jobs:
   check:
+    name: check (Python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.14"]   # the range pyproject.toml allows
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - run: sudo apt-get update && sudo apt-get install -y libportaudio2
       - run: pip install ruff==0.16.10 pytest -e .
       - run: ruff check

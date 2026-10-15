@@ -15,21 +15,28 @@ ask() { local a; read -r -p "  $1 [y/N] " a; [[ $a =~ ^[Yy] ]]; }
 
 systemctl --user disable -q --now tuxwhisper 2>/dev/null || true
 rm -rf "$UNIT_DIR/tuxwhisper.service" "$UNIT_DIR/tuxwhisper.service.d"
-systemctl --user daemon-reload
+systemctl --user daemon-reload 2>/dev/null || true   # no user bus, e.g. over ssh
 note "Removed the background service."
 
 if command -v gsettings >/dev/null && [ -x "$PY" ] &&
    gsettings list-schemas | grep -x org.gnome.settings-daemon.plugins.media-keys >/dev/null; then
     "$PY" - "$CMD" <<'EOF'
-import ast, subprocess, sys
+import ast, os, shlex, subprocess, sys
 
-asr = sys.argv[1] + " "
+COMMANDS = {"toggle", "rewrite", "save", "correct", "settings"}
+def ours(command):
+    # Exact, like the app's own matching: quoted paths count, other programs don't.
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return len(words) == 2 and os.path.basename(words[0]) in ("asr", "tuxwhisper") and words[1] in COMMANDS
 schema = "org.gnome.settings-daemon.plugins.media-keys"
 def get(s, key):
     out = subprocess.run(["gsettings", "get", s, key], capture_output=True, text=True, check=True).stdout
     return ast.literal_eval(out.strip().removeprefix("@as "))
 paths = get(schema, "custom-keybindings")
-keep = [p for p in paths if not get(f"{schema}.custom-keybinding:{p}", "command").startswith(asr)]
+keep = [p for p in paths if not ours(get(f"{schema}.custom-keybinding:{p}", "command"))]
 for p in set(paths) - set(keep):
     subprocess.run(["gsettings", "reset-recursively", f"{schema}.custom-keybinding:{p}"], check=True)
 subprocess.run(["gsettings", "set", schema, "custom-keybindings", repr(keep)], check=True)

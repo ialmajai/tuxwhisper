@@ -1,4 +1,5 @@
 """Tests for TuxWhisper's pure helpers and the dictation core, without a mic, GPU or desktop."""
+import io
 import os
 import stat
 import subprocess
@@ -725,3 +726,40 @@ def test_no_model_switch_while_recording(monkeypatch):
     d.stream = object()
     d.restore_preferred_model()
     assert loads == []
+
+
+# --- shortcuts and downloads -----------------------------------------------------------------
+
+@pytest.mark.parametrize("command, ours", [
+    ("/home/me/tuxwhisper/asr toggle", True),
+    ("'/home/me/my apps/asr' toggle", True),
+    ("/home/me/.local/bin/tuxwhisper toggle", True),
+    ("/opt/fooasr toggle", False),           # another program whose name ends in "asr"
+    ("notify-send asr toggle", False),
+    ("/home/me/tuxwhisper/asr toggle --x", False),
+    ("/home/me/tuxwhisper/asr save", False),
+    ("'unbalanced", False),
+])
+def test_runs_command_matches_only_our_program(command, ours):
+    assert asr.runs_command(command, "toggle") is ours
+
+
+def test_settings_shortcut_label_matches_the_keys_menu(monkeypatch):
+    monkeypatch.setattr(asr, "gnome_shortcuts", lambda: {"/p/": ("<Control><Alt>d", "/x/asr settings")})
+    assert asr.settings_shortcut() == "Ctrl+Alt+D"
+
+
+def test_download_verified_refuses_a_wrong_checksum(monkeypatch, tmp_path):
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+    monkeypatch.setattr(asr.urllib.request, "urlopen", lambda url, timeout: Resp(b"model"))
+    good = asr.hashlib.sha256(b"model").hexdigest()
+    asr.download_verified("http://x", str(tmp_path / "ok.bin"), good)
+    assert (tmp_path / "ok.bin").read_bytes() == b"model"
+    with pytest.raises(OSError):
+        asr.download_verified("http://x", str(tmp_path / "bad.bin"), "0" * 64)
+    assert not (tmp_path / "bad.bin").exists()

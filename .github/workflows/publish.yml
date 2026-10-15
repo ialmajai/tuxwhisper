@@ -8,7 +8,19 @@ on:
     tags: ["v*"]
 
 jobs:
+  test:  # a tag on an untested commit must not reach PyPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      - run: pip install pytest -e .
+      - run: pytest -q
+
   pypi:
+    needs: test
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

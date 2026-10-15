@@ -175,7 +175,7 @@ fi
 
 step "5/6  Keyboard shortcuts and app-grid launcher"
 if [[ "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]]; then
-    "$CMD" bind | sed 's/^/  /'
+    "$CMD" bind | sed 's/^/  /' || note "Couldn't bind the keys; set them under Keys in the settings menu."
     note "Change keys under Keys in the settings menu. Defaults F5 and F3 replace page refresh and"
     note "find-next in browsers; Ctrl+R and Ctrl+G still work."
 else

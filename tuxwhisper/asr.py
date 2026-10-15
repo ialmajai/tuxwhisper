@@ -18,6 +18,7 @@ import datetime
 import difflib
 import fcntl
 import functools
+import hashlib
 import io
 import json
 import os
@@ -62,6 +63,7 @@ ASR_REPOS = {
 }
 # Silero voice activity detection for whisper.cpp; faster-whisper ships its own copy.
 VAD_MODEL_URL = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin"
+VAD_MODEL_SHA256 = "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
 LANGUAGE = os.environ.get("ASR_LANGUAGE") or None  # e.g. "en"; None = auto-detect
 # Whisper imitates the style of its prompt. large-v3-turbo often drops capitals and
 # punctuation on casual speech; a punctuated prompt brings them back. Set to "" to disable.
@@ -84,6 +86,8 @@ CONFIG = os.path.join(CONFIG_DIR, "config.toml")
 RATE = 16000
 RECORDINGS = os.path.join(DATA_DIR, "recordings")
 # Names and jargon Whisper should spell right, one per line; re-read on every take.
+VOCAB_HEADER = "# Names and jargon Whisper should spell right, one per line.\n"
+REPLACEMENTS_HEADER = "# One rule per line: spoken words => written text. \\n is a line break.\n"
 VOCAB = os.path.join(CONFIG_DIR, "vocab.txt")
 # "spoken words => text" rules applied before pasting; re-read on every take.
 REPLACEMENTS = os.path.join(CONFIG_DIR, "replacements.txt")
@@ -184,19 +188,9 @@ def notify(msg, persistent=False, body=None):
 
 
 def settings_shortcut():
-    """The GNOME shortcut bound to `asr settings`, e.g. "Alt+F9", or None."""
-    def get(*args):
-        r = subprocess.run(["gsettings", "get", *args], capture_output=True, text=True, timeout=2)
-        return r.stdout.strip().strip("'")
-    schema = "org.gnome.settings-daemon.plugins.media-keys"
-    try:
-        for path in re.findall(r"'([^']+)'", get(schema, "custom-keybindings")):
-            if get(f"{schema}.custom-keybinding:{path}", "command").endswith(("asr settings", f"{APP} settings")):
-                binding = get(f"{schema}.custom-keybinding:{path}", "binding")
-                return re.sub(r"<(\w+)>", r"\1+", binding).replace("Primary", "Ctrl") or None
-    except (FileNotFoundError, subprocess.TimeoutExpired):  # not GNOME
-        pass
-    return None
+    """The GNOME shortcut bound to the settings command, e.g. "Alt+F9", or None."""
+    ours = our_shortcut(gnome_shortcuts() or {}, "settings")
+    return key_label(ours[1]) if ours else None
 
 
 GNOME_KEYS = {"toggle": "F5", "rewrite": "F3", "save": "F4", "correct": "F6", "settings": "<Alt>F9"}
@@ -250,8 +244,24 @@ def gnome_shortcuts():
         return None
 
 
+def runs_command(command, cmd):
+    """Whether a shortcut's command line runs TuxWhisper's cmd: `<path>/asr cmd` from a git
+    clone or `<path>/tuxwhisper cmd` when installed, paths quoted or not. Exact, so a shortcut
+    running some other program whose name merely ends in "asr" isn't mistaken for ours."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return False
+    return len(words) == 2 and os.path.basename(words[0]) in ("asr", APP) and words[1] == cmd
+
+
+def our_shortcut(shortcuts, cmd):
+    """(path, binding) of the shortcut running cmd, from gnome_shortcuts(), or None."""
+    return next(((p, b) for p, (b, c) in shortcuts.items() if runs_command(c, cmd)), None)
+
+
 def set_shortcut(cmd, binding, path, paths):
-    """Point TuxWhisper's shortcut for cmd at binding, creating the shortcut if needed."""
+    """Point TuxWhisper's shortcut for cmd at binding, creating the shortcut if needed; its path."""
     def gs(*args):
         subprocess.run(["gsettings", "set", *args], check=True, timeout=5)
     if path is None:
@@ -262,6 +272,7 @@ def set_shortcut(cmd, binding, path, paths):
         gs(f"{MEDIA_KEYS}.custom-keybinding:{path}", "command", f"{shlex.quote(command_path())} {cmd}")
         gs(MEDIA_KEYS, "custom-keybindings", str([*paths, path]))
     gs(f"{MEDIA_KEYS}.custom-keybinding:{path}", "binding", binding)
+    return path
 
 
 def keys_menu():
@@ -274,8 +285,7 @@ def keys_menu():
             zenity("--info", "--title=Keys", "--text=On this desktop, keys are set in its own shortcut "
                    "settings. See docs/other-desktops.md for each desktop.")
             return
-        ours = {cmd: next(((p, b) for p, (b, c) in shortcuts.items()
-                           if c.endswith((f"asr {cmd}", f"{APP} {cmd}"))), None) for cmd in KEY_ACTIONS}
+        ours = {cmd: our_shortcut(shortcuts, cmd) for cmd in KEY_ACTIONS}
         rows = [x for cmd, label in KEY_ACTIONS.items()
                 for x in (cmd, label, key_label(ours[cmd][1]) if ours[cmd] else "not bound")]
         cmd = zenity("--list", "--title=Keys", *fit(("Action", "Key"), zip(rows[1::3], rows[2::3])),
@@ -307,39 +317,24 @@ def keys_menu():
 
 
 def bind_gnome():
-    """Add GNOME custom shortcuts for the asr commands, updating any that already run them."""
-    schema = "org.gnome.settings-daemon.plugins.media-keys"
-    def gs(*args):
-        return subprocess.run(["gsettings", *args], capture_output=True, text=True,
-                               check=True, timeout=5).stdout.strip()
-    try:
-        paths = re.findall(r"'([^']+)'", gs("get", schema, "custom-keybindings"))
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    """Add GNOME custom shortcuts for the default keys, keeping any the user already changed."""
+    shortcuts = gnome_shortcuts()
+    if shortcuts is None:
         sys.exit("GNOME's gsettings not found; bind the keys by hand (see docs/other-desktops.md).")
-    asr = shlex.quote(command_path())
-    def get(path, key):
-        return gs("get", f"{schema}.custom-keybinding:{path}", key).strip("'")
+    paths, cmd_path = list(shortcuts), shlex.quote(command_path())
     for cmd, key in GNOME_KEYS.items():
-        label = key.replace("<Alt>", "Alt+")
-        found = [p for p in paths if get(p, "command").endswith((f"asr {cmd}", f"{APP} {cmd}"))]
-        if found:  # keep the key the user chose; only update the path, in case the repo moved
-            gs("set", f"{schema}.custom-keybinding:{found[0]}", "command", f"{asr} {cmd}")
-            print(f"{get(found[0], 'binding').replace('<Alt>', 'Alt+'):7} {asr} {cmd} (already bound)")
+        ours = our_shortcut(shortcuts, cmd)
+        if ours:  # keep the key the user chose; only update the path, in case the repo moved
+            subprocess.run(["gsettings", "set", f"{MEDIA_KEYS}.custom-keybinding:{ours[0]}", "command",
+                            f"{cmd_path} {cmd}"], check=True, timeout=5)
+            print(f"{key_label(ours[1]):7} {cmd_path} {cmd} (already bound)")
             continue
-        taken = next((get(p, "command") for p in paths if get(p, "binding") == key), None)
+        taken = next((c for b, c in shortcuts.values() if b == key), None)
         if taken:
-            print(f"{label:7} skipped: already runs {taken}. Bind {asr} {cmd} to another key.")
+            print(f"{key_label(key):7} skipped: already runs {taken}. Bind {cmd_path} {cmd} to another key.")
             continue
-        path = f"/{schema.replace('.', '/')}/custom-keybindings/tuxwhisper-{cmd}/"
-        while path in paths:  # never overwrite someone else's shortcut
-            path = path[:-1] + "-1/"
-        rel = f"{schema}.custom-keybinding:{path}"
-        gs("set", rel, "name", f"TuxWhisper {cmd}")
-        gs("set", rel, "command", f"{asr} {cmd}")
-        gs("set", rel, "binding", key)
-        paths.append(path)
-        print(f"{label:7} {asr} {cmd}")
-    gs("set", schema, "custom-keybindings", str(paths))
+        paths.append(set_shortcut(cmd, key, None, paths))
+        print(f"{key_label(key):7} {cmd_path} {cmd}")
 
 
 def sound(name):
@@ -970,8 +965,7 @@ class WhisperCpp:
         # Without VAD, silence comes out as "." or invented phrases, which would be pasted.
         self.vad_model = os.path.join(MODELS_DIR, os.path.basename(VAD_MODEL_URL))
         if not os.path.exists(self.vad_model):
-            urllib.request.urlretrieve(VAD_MODEL_URL, self.vad_model + ".part")
-            os.replace(self.vad_model + ".part", self.vad_model)
+            download_verified(VAD_MODEL_URL, self.vad_model, VAD_MODEL_SHA256)
 
     def loaded(self):
         return self.model is not None
@@ -993,6 +987,18 @@ class WhisperCpp:
             params["initial_prompt"] = prompt
         with self.quiet():
             return self.model.transcribe(audio, **params), None
+
+
+def download_verified(url, path, sha256, timeout=60):
+    """Download url to path, refusing a file whose SHA-256 doesn't match: it's loaded as native
+    code's input, so a corrupted or swapped file must not be used."""
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        data = r.read()
+    if hashlib.sha256(data).hexdigest() != sha256:
+        raise OSError(f"{url} didn't match its checksum; not using it")
+    with open(path + ".part", "wb") as f:
+        f.write(data)
+    os.replace(path + ".part", path)
 
 
 def default_asr_model():
@@ -1216,9 +1222,9 @@ def sock_path():
     # XDG_RUNTIME_DIR is private to the user (0700); a shared fallback like /tmp would let
     # other local users reach the socket, so refuse to run without it.
     runtime = os.environ.get("XDG_RUNTIME_DIR")
-    if not runtime:
+    if not runtime:  # an OSError, so callers such as request() handle it instead of exiting
         notify(f"{APP}: XDG_RUNTIME_DIR is not set")
-        sys.exit("XDG_RUNTIME_DIR is not set; run this from a desktop session")
+        raise OSError("XDG_RUNTIME_DIR is not set; run this from a desktop session")
     return os.path.join(runtime, f"{APP}.sock")
 
 
@@ -1294,11 +1300,8 @@ def typed_length(text):
 
 
 def send(cmd):
-    try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.connect(sock_path())
-            s.sendall(cmd.encode())
-    except OSError:
+    """Send a key's command to the daemon; it answers by closing the connection."""
+    if request(cmd, timeout=5) is None:
         notify(f"{APP} daemon is not running")
         sys.exit(1)
 
@@ -1515,7 +1518,7 @@ def download_asr_model(name):
 def pick_asr_model(current):
     """Choose the speech model. A downloaded one is used at once; a new one downloads in the
     background while dictation carries on with the current model."""
-    current = current or default_asr_model().split("-whisper-")[-1]
+    current = current or short_name(default_asr_model())
     pending = pending_model()
     def state(n):
         return ", downloading" if n == pending else ", downloaded" if model_downloaded(n) else ""
@@ -1546,7 +1549,7 @@ def menu_choice(rows):
     yad shows each row's help as a tooltip; without yad, zenity shows it in a column."""
     text = "--text=Pick an item. Setting changes apply on the next recording."
     triples = [rows[i:i + 3] for i in range(0, len(rows), 3)]
-    if shutil.which("yad"):
+    if have_yad():
         # yad hides only one column, so rows are told apart by their visible names.
         by_name = {name: key for key, name, _ in triples}
         r = subprocess.run(["yad", *YAD_APP, "--list", "--title=🐧 TuxWhisper settings",
@@ -1597,8 +1600,7 @@ def keys_summary():
     shortcuts = gnome_shortcuts()
     if shortcuts is None:
         return "set in your desktop"
-    keys = [next((key_label(b) for b, c in shortcuts.values() if c.endswith((f"asr {cmd}", f"{APP} {cmd}"))), "–")
-            for cmd in KEY_ACTIONS]
+    keys = [key_label(ours[1]) if (ours := our_shortcut(shortcuts, cmd)) else "–" for cmd in KEY_ACTIONS]
     return ", ".join(keys)
 
 
@@ -1619,7 +1621,7 @@ def settings_menu():
                 "mode", "Rewrite style", mode + tag["mode"],
                 "rewrite_model", "LLM model (cleanup)", s["rewrite_model"] + tag["rewrite_model"],
                 "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as LLM model"),
-                "asr_model", "Speech model", (s["asr_model"] or default_asr_model().split("-whisper-")[-1])
+                "asr_model", "Speech model", (s["asr_model"] or short_name(default_asr_model()))
                 + tag["asr_model"],
                 "asr_unload_minutes", "Speech model in memory", unload_label(s["asr_unload_minutes"], 0)
                 + tag["asr_unload_minutes"],
@@ -1719,11 +1721,11 @@ def settings_menu():
             correct_last()
             continue
         elif choice == "vocab":
-            edit_list(VOCAB, "Vocabulary", "# Names and jargon Whisper should spell right, one per line.\n")
+            edit_list(VOCAB, "Vocabulary", VOCAB_HEADER)
             continue
         elif choice == "replacements":
             edit_list(REPLACEMENTS, "Replacements",
-                      "# One rule per line: spoken words => written text. \\n is a line break.\n")
+                      REPLACEMENTS_HEADER)
             continue
         update_settings({k: v for k, v in cfg.items() if k not in start or start[k] != v})
 
@@ -1830,9 +1832,9 @@ def correct_last():
         _, kind, spoken, written, _ = choices[i]
         if kind == "rule":
             append_line(REPLACEMENTS, f"{spoken} => {written}",
-                        "# One rule per line: spoken words => written text. \\n is a line break.\n")
+                        REPLACEMENTS_HEADER)
         elif kind == "vocab":
-            append_line(VOCAB, written, "# Names and jargon Whisper should spell right, one per line.\n")
+            append_line(VOCAB, written, VOCAB_HEADER)
         else:
             fix_recording_text(spoken, written)
         learned.append(kind)
