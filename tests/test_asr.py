@@ -662,3 +662,36 @@ def test_history_records_whether_the_take_was_typed(monkeypatch):
     d.toggle()
     d.toggle()
     assert asr.load_history()[-1]["typed"] is False
+
+
+# --- files shared by the daemon and the menu -------------------------------------------------
+
+def test_update_settings_keeps_a_change_made_elsewhere_meanwhile():
+    asr.save_settings({"sounds": True})
+    stale = asr.read_config()                      # the menu read this...
+    asr.update_settings({"asr_model": "small"})    # ...then a download switched the model
+    stale["sounds"] = False
+    asr.update_settings({k: v for k, v in stale.items() if v is False})
+    assert asr.read_config() == {"sounds": False, "asr_model": "small"}
+
+
+def test_correction_keeps_takes_dictated_while_its_dialog_was_open(monkeypatch):
+    real_add_history("send it to jon")
+    fake_dialogs(monkeypatch, "send it to John", [])
+    dialog = asr.zenity
+    def slow_dialog(*args):
+        if "--text-info" in args:
+            real_add_history("a new take")  # the daemon pastes another take meanwhile
+        return dialog(*args)
+    monkeypatch.setattr(asr, "zenity", slow_dialog)
+    asr.correct_last()
+    assert [h["text"] for h in asr.load_history()] == ["send it to John", "a new take"]
+
+
+def test_atomic_write_leaves_no_temporary_files(tmp_path):
+    path = str(tmp_path / "sub" / "f.txt")
+    asr.atomic_write(path, "one")
+    asr.atomic_write(path, "two")
+    with open(path) as f:
+        assert f.read() == "two"
+    assert os.listdir(tmp_path / "sub") == ["f.txt"]

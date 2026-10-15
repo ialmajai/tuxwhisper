@@ -12,10 +12,13 @@
 
 From a git clone, `./asr` runs the same commands.
 """
+import contextlib
 import csv
 import datetime
 import difflib
+import fcntl
 import functools
+import io
 import json
 import os
 import re
@@ -86,6 +89,34 @@ VOCAB = os.path.join(CONFIG_DIR, "vocab.txt")
 REPLACEMENTS = os.path.join(CONFIG_DIR, "replacements.txt")
 # Before 0.2 these lived in the git clone, next to asr.py.
 OLD_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+@contextlib.contextmanager
+def file_lock(path):
+    """Serialise a read-change-write of path between the daemon and the menu or CLI, which
+    otherwise each write their own stale copy and lose the other's change."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        yield
+        return
+    with open(os.path.join(runtime, f"{APP}-{os.path.basename(path)}.lock"), "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def atomic_write(path, text):
+    """Replace path's contents in one step: a reader never sees a half-written file, and a
+    crash mid-write leaves the old file instead of a truncated one."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp-{os.getpid()}"
+    with open(tmp, "w", newline="") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def read_config():
@@ -801,7 +832,7 @@ class Dictation:
             w.writeframes((self.np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes())
         meta = os.path.join(RECORDINGS, "metadata.csv")
         new = not os.path.exists(meta)
-        with open(meta, "a", newline="") as f:
+        with file_lock(meta), open(meta, "a", newline="") as f:
             out = csv.writer(f)
             if new:
                 out.writerow(["file_name", "transcription"])
@@ -1110,20 +1141,30 @@ def add_history(text, rewritten=False, typed=False):
     if history_path():
         entry = {"time": time.strftime("%H:%M"), "text": text, "rewritten": rewritten,
                  "typed": typed, "at": time.time()}
-        save_history((load_history() + [entry])[-20:])
+        with file_lock(history_path()):
+            save_history((load_history() + [entry])[-20:])
 
 
 def save_history(items):
-    with open(history_path(), "w") as f:
-        json.dump(items, f)
+    atomic_write(history_path(), json.dumps(items))
+
+
+def update_history_entry(entry, **changes):
+    """Change one history entry, found again by its time and text: other takes may have been
+    added since it was read."""
+    with file_lock(history_path()):
+        items = load_history()
+        match = next((i for i in items if i.get("at") == entry.get("at") and i["text"] == entry["text"]), None)
+        if match is not None:
+            match.update(changes)
+            save_history(items)
 
 
 def mark_last_saved(name):
     """Note that F4 saved the last take as recordings/name, so a correction can fix its transcript."""
     items = load_history()
     if items:
-        items[-1]["recording"] = name
-        save_history(items)
+        update_history_entry(items[-1], recording=name)
 
 
 def sock_path():
@@ -1347,10 +1388,16 @@ def save_settings(s):
         os.replace(CONFIG, f"{CONFIG}.unreadable-{time.strftime('%Y%m%d-%H%M%S')}")
     except FileNotFoundError:
         pass
-    with open(CONFIG, "w") as f:
-        f.write("# Written by the settings menu; overrides the ASR_* environment variables.\n")
-        f.writelines(f"{k} = {toml_value(v)}\n"
-                     for k, v in s.items())
+    atomic_write(CONFIG, "# Written by the settings menu; overrides the ASR_* environment variables.\n"
+                 + "".join(f"{k} = {toml_value(v)}\n" for k, v in s.items()))
+
+
+def update_settings(changes):
+    """Save only these settings on top of the current file, so a change made elsewhere in the
+    meantime (e.g. a speech model download finishing) isn't overwritten with an old value."""
+    if changes:
+        with file_lock(CONFIG):
+            save_settings({**read_config(), **changes})
 
 
 def pending_model_path():
@@ -1376,9 +1423,7 @@ def set_pending_model(name):
 
 def switch_asr_model(name):
     """Save the speech model and restart the daemon with it (about 15 s); True if it restarted."""
-    cfg = read_config()
-    cfg["asr_model"] = name
-    save_settings(cfg)
+    update_settings({"asr_model": name})
     if subprocess.run(["systemctl", "--user", "is-active", "-q", APP]).returncode:
         return False
     subprocess.run(["systemctl", "--user", "restart", APP])
@@ -1510,6 +1555,7 @@ def settings_menu():
         sys.exit("The settings menu needs zenity (e.g. sudo apt install zenity).")
     while True:
         s, cfg = settings(), read_config()
+        start = dict(cfg)
         # The menu can't see the service's environment, so unchanged settings say so.
         tag = {k: "" if k in cfg else " (default)" for k in s}
         mode = current_mode()
@@ -1542,8 +1588,7 @@ def settings_menu():
                             "--step=5", f"--value={s['sound_volume']}",
                             "--text=Percent of your system volume:")
             if picked:
-                cfg["sound_volume"] = int(picked)
-                save_settings(cfg)
+                update_settings({"sound_volume": int(picked)})
                 sound("device-added")  # preview
                 continue
         elif choice == "language":
@@ -1628,7 +1673,7 @@ def settings_menu():
             edit_list(REPLACEMENTS, "Replacements",
                       "# One rule per line: spoken words => written text. \\n is a line break.\n")
             continue
-        save_settings(cfg)
+        update_settings({k: v for k, v in cfg.items() if k not in start or start[k] != v})
 
 
 WORD_EDGES = ".,!?;:\"'()[]“”‘’"
@@ -1667,13 +1712,15 @@ def append_line(path, line, header):
 def fix_recording_text(name, text):
     """Replace the transcript of recordings/name in metadata.csv."""
     meta = os.path.join(RECORDINGS, "metadata.csv")
-    with open(meta, newline="") as f:
-        rows = list(csv.reader(f))
-    for row in rows[1:]:
-        if row and row[0] == name:
-            row[1] = text
-    with open(meta, "w", newline="") as f:
-        csv.writer(f).writerows(rows)
+    with file_lock(meta):  # F4 appends to the same file
+        with open(meta, newline="") as f:
+            rows = list(csv.reader(f))
+        for row in rows[1:]:
+            if row and row[0] == name:
+                row[1] = text
+        out = io.StringIO()
+        csv.writer(out).writerows(rows)
+        atomic_write(meta, out.getvalue())
 
 
 RETYPE_WITHIN = 600  # seconds after a dictation during which a correction retypes it in place
@@ -1707,8 +1754,7 @@ def correct_last():
         replaced = request("retype") == "ok"
     if not replaced:  # hand the fix over to paste by hand
         clipboard_set(fixed)
-    last.update(text=fixed, typed=replaced, at=time.time())
-    save_history(items)
+    update_history_entry(last, text=fixed, typed=replaced, at=time.time())
     done = "Replaced the dictated text." if replaced else "The corrected text is copied. Paste it with Ctrl+V."
 
     choices = [(f'Always write "{spoken}" as "{written}"' if kind == "rule"
