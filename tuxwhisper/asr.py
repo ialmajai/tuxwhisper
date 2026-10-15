@@ -761,8 +761,8 @@ class Dictation:
                 close_notification(busy[0])
             print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
         text = apply_replacements(text)
-        add_history(text, rewritten=rewrite)
-        self.paste(text + " ")
+        typed = self.paste(text + " ")
+        add_history(text, rewritten=rewrite, typed=typed)  # only a typed take can be retyped
         self.warn_if_clipped(audio)
         threading.Thread(target=self.refresh_hint, daemon=True).start()  # in case the key changed
 
@@ -821,7 +821,8 @@ class Dictation:
             os.remove(retype_path())
         except (OSError, ValueError, TypeError):
             return False
-        if self.kbd is None:
+        # Mid-take, the text before the cursor may not be the one to correct.
+        if self.kbd is None or self.stream is not None or self.next_ticket != self.serving:
             return False
         time.sleep(0.4)  # the correction dialog just closed; let focus return to the app
         k, ec = self.kbd, self.ec
@@ -830,10 +831,10 @@ class Dictation:
                 k.write(ec.EV_KEY, ec.KEY_BACKSPACE, val)
                 k.syn()
             time.sleep(0.004)
-        self.paste(job["text"] + " ")
-        return True
+        return self.paste(job["text"] + " ")
 
     def paste(self, text):
+        """Type text at the cursor; True if it was typed, False if it was only copied (or not even that)."""
         # Clipboard + a paste shortcut handles any Unicode and works on X11 and Wayland.
         # Some apps (e.g. terminals) paste the primary selection on Shift+Insert, so set both;
         # the Ctrl shortcuts always paste the clipboard.
@@ -841,15 +842,15 @@ class Dictation:
             if clipboard_set(text):
                 notify("📋 Copied; paste it with Ctrl+V")
             else:
-                notify("Couldn't copy the transcript; find it under Recent transcripts in the settings menu")
-            return
+                notify(COPY_FAILED)
+            return False
         paste_key = settings()["paste_key"]
         keys = [getattr(self.ec, k) for k in PASTE_KEYS[paste_key]]
         selections = ("clipboard", "primary") if paste_key == "shift+insert" else ("clipboard",)
         saved = {sel: clipboard_get(sel) for sel in selections}
         if not all(clipboard_set(text, sel) for sel in saved):  # pasting now would paste old text
-            notify("Couldn't copy the transcript; find it under Recent transcripts in the settings menu")
-            return
+            notify(COPY_FAILED)
+            return False
         time.sleep(0.05)
         ec, k = self.ec, self.kbd
         presses = [(c, 1) for c in keys] + [(c, 0) for c in reversed(keys)]
@@ -861,6 +862,10 @@ class Dictation:
         for sel, old in saved.items():
             if old is not None:
                 clipboard_set(old, sel)
+        return True
+
+
+COPY_FAILED = "Couldn't copy the transcript; find it under Recent transcripts in the settings menu"
 
 
 # Speech model memory: faster-whisper parks the model in RAM (CTranslate2); WhisperCpp frees it.
@@ -1099,10 +1104,12 @@ def load_history():
         return []
 
 
-def add_history(text, rewritten=False):
-    """Keep the last 20 pasted transcripts for "Recent transcripts" and "Correct last transcript"."""
+def add_history(text, rewritten=False, typed=False):
+    """Keep the last 20 transcripts for "Recent transcripts" and "Correct last transcript".
+    typed: it was typed at the cursor (not just copied), so a correction may erase and retype it."""
     if history_path():
-        entry = {"time": time.strftime("%H:%M"), "text": text, "rewritten": rewritten}
+        entry = {"time": time.strftime("%H:%M"), "text": text, "rewritten": rewritten,
+                 "typed": typed, "at": time.time()}
         save_history((load_history() + [entry])[-20:])
 
 
@@ -1669,6 +1676,9 @@ def fix_recording_text(name, text):
         csv.writer(f).writerows(rows)
 
 
+RETYPE_WITHIN = 600  # seconds after a dictation during which a correction retypes it in place
+
+
 def correct_last():
     """Edit the last transcript, copy the fix, and offer to learn from it."""
     items = load_history()
@@ -1688,14 +1698,17 @@ def correct_last():
     if fixed is None or fixed.strip() == last["text"].strip():
         return
     fixed, before = fixed.strip(), last["text"]
-    last["text"] = fixed
-    save_history(items)
-    # Erase the dictation (it was typed with a trailing space) and type the fix in its place.
-    with open(retype_path(), "w") as f:
-        json.dump({"delete": typed_length(before) + 1, "text": fixed}, f)
-    replaced = request("retype") == "ok"
-    if not replaced:  # no daemon or no virtual keyboard: hand the fix over to paste by hand
+    # Erase the dictation (it was typed with a trailing space) and type the fix in its place,
+    # but only if it was really typed and recently: after a while the cursor has likely moved.
+    replaced = False
+    if last.get("typed") and time.time() - last.get("at", 0) < RETYPE_WITHIN:
+        with open(retype_path(), "w") as f:
+            json.dump({"delete": typed_length(before) + 1, "text": fixed}, f)
+        replaced = request("retype") == "ok"
+    if not replaced:  # hand the fix over to paste by hand
         clipboard_set(fixed)
+    last.update(text=fixed, typed=replaced, at=time.time())
+    save_history(items)
     done = "Replaced the dictated text." if replaced else "The corrected text is copied. Paste it with Ctrl+V."
 
     choices = [(f'Always write "{spoken}" as "{written}"' if kind == "rule"

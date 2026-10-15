@@ -20,7 +20,9 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
   while you keep dictating with the current model, then TuxWhisper switches to it. If a model
   won't load, TuxWhisper goes back to the default.
 - Vocabulary, replacements and custom rewrite styles
-- Correct last transcript: fix what was pasted, copy the fix, and tick what TuxWhisper should
+- Correct last transcript: fix what was pasted; Save erases it and types the fix in its place
+  (within 10 minutes of dictating, with the cursor still after it; otherwise the fix is copied
+  for you to paste). Then tick what TuxWhisper should
   remember: a replacement rule (e.g. "tux whisper" → "TuxWhisper"), a vocabulary word, or the
   transcript of the recording you just saved with F4. Names and jargon come ticked; a fix of
   plain words (e.g. "two" → "three") doesn't, since as a rule it would change every "two". It opens

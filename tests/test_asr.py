@@ -196,7 +196,7 @@ def make_dictation(monkeypatch):
     d.last_save = 0.0
     d.last_clip_warning = -asr.CLIP_WARN_EVERY
     d.pasted = []
-    d.paste = lambda text: d.pasted.append(text.strip())
+    d.paste = lambda text: d.pasted.append(text.strip()) or True
     d.refresh_hint = lambda: None
     monkeypatch.setattr(asr, "warm_rewrite_model", lambda: None)
     monkeypatch.setattr(asr, "llm_cleanup", lambda text, lang: f"CLEANED:{text}")
@@ -551,7 +551,7 @@ def test_retype_erases_the_dictation_and_pastes_the_fix(monkeypatch, tmp_path):
 
 def test_correct_last_replaces_in_place_when_the_daemon_can(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    real_add_history("send it to jon")
+    real_add_history("send it to jon", typed=True)
     jobs = []
     def daemon(cmd):
         with open(asr.retype_path()) as f:
@@ -625,3 +625,40 @@ def test_list_rows_starting_with_a_dash_are_not_options(monkeypatch):
     for cmd in cmds:
         assert cmd[-3:] == ["--", "0", "- Buy milk"]
         assert not any(a.startswith("--button") for a in cmd[cmd.index("--"):])
+
+
+@pytest.mark.parametrize("typed, age, expected", [
+    (True, 0, True),                          # fresh and typed: replace in place
+    (False, 0, False),                        # only copied (paste failed): never erase
+    (True, asr.RETYPE_WITHIN + 1, False),     # too old: the cursor has probably moved
+])
+def test_correct_last_retypes_only_a_fresh_typed_dictation(monkeypatch, typed, age, expected):
+    real_add_history("send it to jon", typed=typed)
+    items = asr.load_history()
+    items[-1]["at"] -= age
+    asr.save_history(items)
+    asked = []
+    monkeypatch.setattr(asr, "request", lambda cmd: asked.append(cmd) or "ok")
+    _, copied = fake_dialogs(monkeypatch, "send it to John", [])
+    asr.correct_last()
+    assert bool(asked) is expected and bool(copied) is not expected
+
+
+def test_retype_refuses_while_a_take_is_in_flight(monkeypatch):
+    monkeypatch.setattr(asr.time, "sleep", lambda s: None)
+    d = make_dictation(monkeypatch)
+    d.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
+    d.kbd = FakeKeyboard()
+    d.next_ticket = 1  # a take stopped but isn't pasted yet
+    with open(asr.retype_path(), "w") as f:
+        f.write('{"delete": 6, "text": "Hello"}')
+    assert not d.retype() and d.kbd.keys == []
+
+
+def test_history_records_whether_the_take_was_typed(monkeypatch):
+    d = make_dictation(monkeypatch)
+    monkeypatch.setattr(asr, "add_history", real_add_history)
+    d.paste = lambda text: False  # e.g. the clipboard couldn't be set
+    d.toggle()
+    d.toggle()
+    assert asr.load_history()[-1]["typed"] is False
