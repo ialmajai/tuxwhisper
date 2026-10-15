@@ -13,6 +13,8 @@ import pytest
 
 from tuxwhisper import asr
 
+real_add_history = asr.add_history  # the fixture below stubs it out for the dictation tests
+
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
@@ -23,7 +25,7 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(asr, "RECORDINGS", str(tmp_path / "recordings"))
     monkeypatch.setattr(asr, "sound", lambda name: None)
     monkeypatch.setattr(asr, "close_notification", lambda nid: None)
-    monkeypatch.setattr(asr, "add_history", lambda text: None)
+    monkeypatch.setattr(asr, "add_history", lambda text, **kw: None)
     monkeypatch.setattr(asr, "notify", lambda msg, **kw: notified.append(msg))
     notified.clear()
 
@@ -439,3 +441,81 @@ def test_take_loads_a_model_once_there_is_room(monkeypatch):
 def test_self_correction_rule_only_for_correction_cues(text, cued):
     assert (asr.SELF_CORRECTION in asr.rewrite_task(text)) is cued
     assert asr.rewrite_task(text).startswith(asr.modes()[asr.current_mode()])
+
+
+# --- correcting the last transcript ----------------------------------------------------------
+
+def test_suggest_learning_names_get_rules_and_vocabulary():
+    got = asr.suggest_learning("I use tux whisper daily.", "I use TuxWhisper daily.")
+    assert ("rule", "tux whisper", "TuxWhisper", True) in got
+    assert ("vocab", "TuxWhisper", "TuxWhisper", True) in got
+
+
+def test_suggest_learning_plain_words_start_unticked():
+    assert asr.suggest_learning("we need two copies", "we need three copies") == [
+        ("rule", "two", "three", False)]
+
+
+def test_suggest_learning_skips_rewrites_punctuation_and_known_words():
+    assert asr.suggest_learning("Hello, world", "Hello world.") == []
+    assert asr.suggest_learning("one two three four five six", "a b c d e f") == []
+    got = asr.suggest_learning("ask kubernetes", "ask Kubernetes", ["Kubernetes"])
+    assert got == [("rule", "kubernetes", "Kubernetes", True)]
+
+
+def fake_dialogs(monkeypatch, edited, ticked):
+    """zenity: the text box returns edited; the checklist returns the ticked row indexes."""
+    shown = []
+    def dialog(*args):
+        shown.append(args)
+        if "--text-info" in args:
+            return edited
+        if "--checklist" in args:
+            return " ".join(str(i) for i in ticked)
+        return None
+    monkeypatch.setattr(asr, "zenity", dialog)
+    copied = []
+    monkeypatch.setattr(asr, "clipboard_set", lambda text, *a: copied.append(text) or True)
+    return shown, copied
+
+
+def test_correct_last_copies_fix_and_learns_ticked_items(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    real_add_history("I use tux whisper daily.")
+    _, copied = fake_dialogs(monkeypatch, "I use TuxWhisper daily.", [0, 1])
+    asr.correct_last()
+    assert copied == ["I use TuxWhisper daily."]
+    assert asr.load_history()[-1]["text"] == "I use TuxWhisper daily."
+    assert asr.apply_replacements("tux whisper rocks") == "TuxWhisper rocks"
+    assert asr.vocab() == "TuxWhisper"
+
+
+def test_correct_last_unchanged_does_nothing(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    real_add_history("Fine as it is.")
+    shown, copied = fake_dialogs(monkeypatch, "Fine as it is.", [])
+    asr.correct_last()
+    assert copied == [] and len(shown) == 1
+
+
+def test_correct_last_fixes_the_saved_recording(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    os.makedirs(asr.RECORDINGS)
+    with open(os.path.join(asr.RECORDINGS, "metadata.csv"), "w") as f:
+        f.write("file_name,transcription\na.wav,first take\nb.wav,send it to jon\n")
+    real_add_history("send it to jon")
+    asr.mark_last_saved("b.wav")
+    fake_dialogs(monkeypatch, "send it to John", [2])  # 0: "jon" rule, 1: "John" vocabulary, 2: recording
+    asr.correct_last()
+    with open(os.path.join(asr.RECORDINGS, "metadata.csv")) as f:
+        assert f.read().splitlines() == ["file_name,transcription", "a.wav,first take",
+                                         "b.wav,send it to John"]
+
+
+def test_correct_last_never_offers_to_fix_a_rewritten_take(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    real_add_history("Dear team, the build failed.", rewritten=True)
+    asr.mark_last_saved("c.wav")
+    shown, _ = fake_dialogs(monkeypatch, "Dear team, the build passed.", [])
+    asr.correct_last()
+    assert not any("saved recording" in a for args in shown for a in args)

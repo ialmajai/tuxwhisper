@@ -29,7 +29,8 @@ reaches a cloud service, and there's nothing to pay for.
   for other languages.
 
 **Also:** tap or hold to talk, a custom vocabulary for names and jargon, replacements such as
-"new line" → line break, a settings menu with your last 20 transcripts, and
+"new line" → line break, corrections that teach it your words for next time, a settings menu
+with your last 20 transcripts, and
 [saved recordings](docs/saving-takes.md) for fine-tuning Whisper to your voice and accent.
 TuxWhisper types by pasting, then puts back the text you had copied.
 

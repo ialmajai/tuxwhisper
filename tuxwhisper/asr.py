@@ -6,6 +6,7 @@
   tuxwhisper rewrite    same, but clean up the transcript with a local LLM (Ollama) first
   tuxwhisper save       save the last recording + its transcript for fine-tuning
   tuxwhisper settings   open the settings menu (needs zenity)
+  tuxwhisper correct    fix the last transcript and learn from the changes
   tuxwhisper bind       bind the default keys (F5, F3, F4, Alt+F9) as GNOME custom shortcuts
   tuxwhisper uninstall  remove the service, shortcuts and launcher that setup added
 
@@ -13,6 +14,7 @@ From a git clone, `./asr` runs the same commands.
 """
 import csv
 import datetime
+import difflib
 import functools
 import json
 import os
@@ -159,7 +161,8 @@ def settings_shortcut():
 
 GNOME_KEYS = {"toggle": "F5", "rewrite": "F3", "save": "F4", "settings": "<Alt>F9"}
 KEY_ACTIONS = {"toggle": "Dictate", "rewrite": "Dictate with LLM cleanup",
-               "save": "Save the last recording", "settings": "Open this settings menu"}
+               "save": "Save the last recording", "settings": "Open this settings menu",
+               "correct": "Correct the last transcript"}
 KEY_SUGGESTIONS = ["F5", "F3", "F4", "F6", "F7", "F8", "F9", "F10", "F12", "Alt+F9",
                    "Ctrl+Alt+D", "Super+H"]
 MEDIA_KEYS = "org.gnome.settings-daemon.plugins.media-keys"
@@ -741,7 +744,7 @@ class Dictation:
                 close_notification(busy[0])
             print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
         text = apply_replacements(text)
-        add_history(text)
+        add_history(text, rewritten=rewrite)
         self.paste(text + " ")
         self.warn_if_clipped(audio)
         threading.Thread(target=self.refresh_hint, daemon=True).start()  # in case the key changed
@@ -788,6 +791,7 @@ class Dictation:
             out.writerow([name, text])
         takes, seconds = dataset_size(meta)
         total = f"{seconds / 60:.0f} min" if seconds >= 60 else f"{seconds:.0f} s"
+        mark_last_saved(name)
         print(f"saved {name} ({takes} recordings, {total})", flush=True)
         notify(f"💾 Saved ({takes} recordings, {total})")
 
@@ -1057,12 +1061,24 @@ def load_history():
         return []
 
 
-def add_history(text):
-    """Keep the last 20 pasted transcripts for the settings menu's "Recent transcripts"."""
+def add_history(text, rewritten=False):
+    """Keep the last 20 pasted transcripts for "Recent transcripts" and "Correct last transcript"."""
     if history_path():
-        items = (load_history() + [{"time": time.strftime("%H:%M"), "text": text}])[-20:]
-        with open(history_path(), "w") as f:
-            json.dump(items, f)
+        entry = {"time": time.strftime("%H:%M"), "text": text, "rewritten": rewritten}
+        save_history((load_history() + [entry])[-20:])
+
+
+def save_history(items):
+    with open(history_path(), "w") as f:
+        json.dump(items, f)
+
+
+def mark_last_saved(name):
+    """Note that F4 saved the last take as recordings/name, so a correction can fix its transcript."""
+    items = load_history()
+    if items:
+        items[-1]["recording"] = name
+        save_history(items)
 
 
 def sock_path():
@@ -1383,6 +1399,7 @@ MENU_HELP = {
     "asr_model": "The Whisper model: bigger is more accurate, smaller is faster",
     "asr_unload_minutes": "Free GPU memory when you haven't dictated for a while; reloads in under a second",
     "llm_unload_minutes": "Free the cleanup model's GPU memory after a while; reloading takes a few seconds",
+    "correct": "Fix the last transcript; TuxWhisper offers to remember the fix for next time",
     "history": "Your last 20 transcripts; pick one to copy it again",
     "vocab": "Names and jargon Whisper should spell right (English)",
     "replacements": 'Spoken words to replace, e.g. "new line" with a line break',
@@ -1421,6 +1438,7 @@ def settings_menu():
                 + tag["asr_unload_minutes"],
                 "llm_unload_minutes", "LLM in memory", unload_label(s["llm_unload_minutes"], -1)
                 + tag["llm_unload_minutes"],
+                "correct", "Correct last transcript", "Fix…",
                 "history", "Recent transcripts", f"{len(load_history())} this session",
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…",
@@ -1511,6 +1529,9 @@ def settings_menu():
                 clipboard_set(items[int(picked.split("|")[0])]["text"])
                 notify("📋 Copied; paste it with Ctrl+V")
             continue
+        elif choice == "correct":
+            correct_last()
+            continue
         elif choice == "vocab":
             edit_list(VOCAB, "Vocabulary", "# Names and jargon Whisper should spell right, one per line.\n")
             continue
@@ -1519,6 +1540,106 @@ def settings_menu():
                       "# One rule per line: spoken words => written text. \\n is a line break.\n")
             continue
         save_settings(cfg)
+
+
+WORD_EDGES = ".,!?;:\"'()[]“”‘’"
+
+
+def suggest_learning(before, after, vocabulary=()):
+    """What a correction can teach, as (kind, spoken, written, ticked) with kind "rule" (a
+    replacement) or "vocab". Only short changed phrases count: a longer edit is a rewrite, not
+    a mishearing. Names and jargon are ticked; plain-word rules start unticked, because a
+    one-off fix like "two" -> "three" would be wrong as a rule."""
+    a = [w.strip(WORD_EDGES) for w in before.split()]
+    b = [w.strip(WORD_EDGES) for w in after.split()]
+    a, b = [w for w in a if w], [w for w in b if w]
+    known = {v.lower() for v in vocabulary}
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(a=a, b=b, autojunk=False).get_opcodes():
+        if op != "replace" or i2 - i1 > 4 or j2 - j1 > 4:
+            continue
+        old, new = " ".join(a[i1:i2]), " ".join(b[j1:j2])
+        special = any(c.isupper() or c.isdigit() for c in new)
+        out.append(("rule", old.lower(), new, special))
+        for i, w in enumerate(b[j1:j2], start=j1):
+            if i > 0 and any(c.isupper() for c in w) and w.lower() not in known:
+                known.add(w.lower())
+                out.append(("vocab", w, w, True))
+    return out
+
+
+def append_line(path, line, header):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    new = not os.path.exists(path)
+    with open(path, "a") as f:
+        f.write((header if new else "") + line + "\n")
+
+
+def fix_recording_text(name, text):
+    """Replace the transcript of recordings/name in metadata.csv."""
+    meta = os.path.join(RECORDINGS, "metadata.csv")
+    with open(meta, newline="") as f:
+        rows = list(csv.reader(f))
+    for row in rows[1:]:
+        if row and row[0] == name:
+            row[1] = text
+    with open(meta, "w", newline="") as f:
+        csv.writer(f).writerows(rows)
+
+
+def correct_last():
+    """Edit the last transcript, copy the fix, and offer to learn from it."""
+    items = load_history()
+    if not items:
+        zenity("--info", "--title=Correct last transcript", "--text=Nothing dictated this session yet.")
+        return
+    last = items[-1]
+    with open(os.path.join(os.path.dirname(history_path()), f"{APP}-correct.txt"), "w") as f:
+        f.write(last["text"])
+        draft = f.name
+    try:
+        fixed = zenity("--text-info", "--editable", f"--filename={draft}",
+                       "--title=Correct last transcript", "--width=560", "--height=260",
+                       "--ok-label=Save")
+    finally:
+        os.remove(draft)
+    if fixed is None or fixed.strip() == last["text"].strip():
+        return
+    fixed, before = fixed.strip(), last["text"]
+    last["text"] = fixed
+    save_history(items)
+    clipboard_set(fixed)
+
+    choices = [(f'Always write "{spoken}" as "{written}"' if kind == "rule"
+                else f'Add "{written}" to the vocabulary', kind, spoken, written, ticked)
+               for kind, spoken, written, ticked in suggest_learning(before, fixed, (vocab() or "").split(", "))]
+    if last.get("recording") and not last.get("rewritten"):
+        choices.append(("Fix the saved recording's transcript (for fine-tuning)", "recording",
+                        last["recording"], fixed, True))
+    picked = set()
+    if choices:
+        rows = [x for i, c in enumerate(choices) for x in ("TRUE" if c[4] else "FALSE", str(i), c[0])]
+        out = zenity("--list", "--checklist", "--title=Learn from this correction",
+                     *fit(("", "Change"), [("", c[0]) for c in choices]),
+                     "--text=The corrected text is copied. Paste it with Ctrl+V.\n"
+                     "Tick what TuxWhisper should remember:",
+                     "--column=", "--column=i", "--column=Change", "--hide-column=2",
+                     "--print-column=2", "--separator= ", "--ok-label=Remember",
+                     "--cancel-label=Skip", *rows)
+        picked = {int(i) for i in re.findall(r"\d+", out or "")}
+    learned = []
+    for i in sorted(picked):
+        _, kind, spoken, written, _ = choices[i]
+        if kind == "rule":
+            append_line(REPLACEMENTS, f"{spoken} => {written}",
+                        "# One rule per line: spoken words => written text. \\n is a line break.\n")
+        elif kind == "vocab":
+            append_line(VOCAB, written, "# Names and jargon Whisper should spell right, one per line.\n")
+        else:
+            fix_recording_text(spoken, written)
+        learned.append(kind)
+    notify("📋 Corrected text copied; paste it with Ctrl+V",
+           body=f"Remembered {len(learned)} change{'s' * (len(learned) != 1)}" if learned else None)
 
 
 def command_path():
@@ -1579,6 +1700,8 @@ def main():
         settings_menu()
     elif cmd == "bind":
         bind_gnome()
+    elif cmd == "correct":
+        correct_last()
     elif cmd == "download" and len(sys.argv) > 2:
         download_asr_model(sys.argv[2])
     elif cmd == "setup":

@@ -20,6 +20,11 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
   while you keep dictating with the current model, then TuxWhisper switches to it. If a model
   won't load, TuxWhisper goes back to the default.
 - Vocabulary, replacements and custom rewrite styles
+- Correct last transcript: fix what was pasted, copy the fix, and tick what TuxWhisper should
+  remember: a replacement rule (e.g. "tux whisper" → "TuxWhisper"), a vocabulary word, or the
+  transcript of the recording you just saved with F4. Names and jargon come ticked; a fix of
+  plain words (e.g. "two" → "three") doesn't, since as a rule it would change every "two". To
+  open it with a key, bind "Correct the last transcript" under **Keys**.
 - Recent transcripts: the last 20 this session; pick one to copy it again. TuxWhisper keeps
   them in `$XDG_RUNTIME_DIR`, which only you can read and which empties when you log out.
 

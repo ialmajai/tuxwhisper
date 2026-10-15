@@ -28,6 +28,7 @@ tuxwhisper rewrite    # start / stop dictation with LLM cleanup
 tuxwhisper save       # save the last recording
 tuxwhisper settings   # open the settings menu
 tuxwhisper bind       # bind the default keys on GNOME
+tuxwhisper correct    # fix the last transcript and learn from it
 tuxwhisper serve      # run the daemon in the foreground (systemd does this at login)
 tuxwhisper setup      # install packages, service, shortcuts (same as ./install.sh)
 tuxwhisper uninstall  # remove what setup added (same as ./uninstall.sh)
