@@ -420,3 +420,22 @@ def test_take_loads_a_model_once_there_is_room(monkeypatch):
     d.toggle()
     d.toggle()
     assert loads == ["small"] and d.pasted == ["take1"]
+
+
+# --- self-corrections ------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text, cued", [
+    ("let's meet on tuesday no wait wednesday", True),
+    ("send it to john sorry i mean mike", True),
+    ("at four actually make that five", True),
+    ("call you tomorrow or rather friday", True),
+    ("book six scratch that eight", True),
+    ("report dot txt no no report dot md", True),
+    ("what i mean is that the tests are flaky", False),
+    ("is it tuesday or wednesday", False),
+    ("there are no errors in the log", False),
+    ("i actually liked the first version", False),
+])
+def test_self_correction_rule_only_for_correction_cues(text, cued):
+    assert (asr.SELF_CORRECTION in asr.rewrite_task(text)) is cued
+    assert asr.rewrite_task(text).startswith(asr.modes()[asr.current_mode()])

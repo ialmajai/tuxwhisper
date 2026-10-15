@@ -11,6 +11,9 @@ Pasted:   So can you explain how the attention mechanism works?
 
 - **Questions stay questions.** Dictate "what is a closure" and it pastes "What is a
   closure?" with no answer attached.
+- **Self-corrections:** say "meet on Tuesday, no wait, Wednesday" and it pastes "Meet on
+  Wednesday." It acts on clear cues (no wait, sorry, I mean, make that, or rather, scratch
+  that) and leaves other sentences alone. A bare "no" isn't treated as a correction.
 - **Same language out:** it answers in the language you spoke, in every style. `llama3.2` is
   weak outside English (it garbles Arabic, for example). For other languages, `ollama pull
   qwen3:8b` (about 5 GB of GPU memory) and pick it as the LLM model in the menu.
