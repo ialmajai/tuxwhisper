@@ -55,10 +55,13 @@ TuxWhisper couldn't use the GPU or the CUDA libraries. Check that `nvidia-smi` w
 </details>
 
 <details>
-<summary><b>CUDA out of memory</b></summary>
+<summary><b>"Not enough GPU memory" for the speech model</b></summary>
 
-Another program is using the GPU. Free some memory, or run Ollama for LLM cleanup on another machine
-with `OLLAMA_URL`.
+Another program is using the GPU (`nvidia-smi` shows which). TuxWhisper then uses the largest
+downloaded speech model that fits, says so, and goes back to yours once there's room again. If
+not even the smallest fits, it tells you and tries again each time you dictate. Free some
+memory, set `ASR_DEVICE=cpu` (see [CPU mode](configuration.md#cpu-mode)), or run Ollama for
+LLM cleanup on another machine with `OLLAMA_URL`.
 </details>
 
 <details>

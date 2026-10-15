@@ -135,8 +135,8 @@ def notify(msg, persistent=False, body=None):
             return nid
         except subprocess.TimeoutExpired:
             return None
-    subprocess.Popen(["notify-send", "-a", APP, "-t", "1500",
-                      "-h", "boolean:transient:true", msg],
+    subprocess.Popen(["notify-send", "-a", APP, "-t", "6000" if body else "1500",
+                      "-h", "boolean:transient:true", msg, *extra],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return None
 
@@ -519,8 +519,10 @@ class Dictation:
         from evdev.uinput import UInputError
 
         self.np, self.sd, self.ec = np, sd, ecodes
-        self.model = load_model()
-        self.model.transcribe(np.zeros(RATE, dtype=np.float32))  # warm-up
+        self.model, self.fallback_from = load_model()
+        self.last_memory_notice = 0.0
+        if self.model:  # None: no GPU memory yet; ensure_model tries again at each take
+            self.model.transcribe(np.zeros(RATE, dtype=np.float32))  # warm-up
         # Register every paste key so the menu can switch between them without a restart.
         all_keys = sorted({getattr(ecodes, k) for keys in PASTE_KEYS.values() for k in keys})
         try:
@@ -584,19 +586,60 @@ class Dictation:
                 and time.monotonic() - self.last_used > minutes * 60
                 and self.model_lock.acquire(blocking=False)):  # not while one is transcribing
             try:
-                if speech_loaded(self.model):
+                if self.model is not None and speech_loaded(self.model):
                     speech_unload(self.model)
                     print(f"speech model unloaded after {minutes} min idle", flush=True)
             finally:
                 self.model_lock.release()
 
     def ensure_model(self):
-        """Load the speech model back onto the GPU if it was freed (under a second from RAM)."""
+        """Load the speech model back onto the GPU if it was freed (under a second from RAM).
+        Without enough GPU memory, use the largest smaller model that fits; False if none does."""
         with self.model_lock:
-            if not speech_loaded(self.model):
-                t0 = time.time()
+            if self.fallback_from:
+                self.try_preferred_model()
+            if self.model is None:
+                return self.use_smaller_model(self.fallback_from)
+            if speech_loaded(self.model):
+                return True
+            t0 = time.time()
+            try:
                 speech_load(self.model)
-                print(f"speech model reloaded in {time.time() - t0:.2f}s", flush=True)
+            except RuntimeError as e:
+                if not out_of_memory(e):
+                    raise
+                print(f"no GPU memory to reload the speech model ({e})", flush=True)
+                return self.use_smaller_model(self.fallback_from or short_name(asr_model()))
+            print(f"speech model reloaded in {time.time() - t0:.2f}s", flush=True)
+            return True
+
+    def use_smaller_model(self, preferred):
+        """Swap in the largest smaller model that fits in free GPU memory."""
+        tried = [preferred]
+        found = load_smaller(preferred, tried)
+        if not found:
+            if time.monotonic() - self.last_memory_notice > 10:  # once per take, not per thread
+                self.last_memory_notice = time.monotonic()
+                no_memory_notice(tried)
+            return False
+        self.model, name = found
+        self.fallback_from = preferred
+        notify(f"⚠ GPU memory is short: using {name}", body=f"Back to {preferred} once there's room")
+        return True
+
+    def try_preferred_model(self):
+        """Go back to the chosen model once the GPU has room for it again."""
+        free = free_gpu_gb()
+        if free is None or free < model_size(self.fallback_from) + GPU_MARGIN_GB:
+            return
+        try:
+            self.model = load_whisper(asr_model())
+        except RuntimeError as e:
+            if not out_of_memory(e):
+                raise
+            return
+        notify(f"✅ Back to {self.fallback_from}", body="The GPU has room for it again")
+        self.fallback_from = None
 
     def toggle(self, cut_at=None, rewrite=False):
         with self.lock:
@@ -649,7 +692,8 @@ class Dictation:
             audio = audio[:-excess]
         if len(audio) < RATE * 0.3:  # too short to be speech; Whisper hallucinates on these
             return
-        self.ensure_model()
+        if not self.ensure_model():
+            return
         with self.model_lock:
             t0 = time.time()
             lang = settings()["language"] or self.model.detect_language(audio, vad_filter=True)[0]
@@ -835,6 +879,58 @@ def model_downloaded(name):
     return isinstance(try_to_load_from_cache(ASR_REPOS.get(name, name), "model.bin"), str)
 
 
+GPU_MARGIN_GB = 0.4  # room for the model's working memory on top of its weights
+
+
+def out_of_memory(e):
+    return "out of memory" in str(e).lower()
+
+
+def short_name(name):
+    """The menu name of a model given by repo, e.g. large-v3-turbo for the GPU default."""
+    return name.split("faster-whisper-")[-1]
+
+
+def model_size(name):
+    """A menu model's size in GB, or infinity for one the menu doesn't know."""
+    return next((float(m[2].split()[0]) for m in ASR_MODELS if m[0] == short_name(name)), float("inf"))
+
+
+def free_gpu_gb():
+    """Free memory on the NVIDIA GPU, or None if nvidia-smi can't tell."""
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=3)
+        return int(r.stdout.split()[0]) / 1024
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
+        return None
+
+
+def load_smaller(name, tried=None):
+    """Try each downloaded model smaller than name, largest first, and return the first that
+    loads on the GPU as (model, its name), or None. Names tried are added to tried.
+    English-only models are tried only when English is set."""
+    english = settings()["language"] == "en"
+    for cand, _, _ in sorted(asr_models(), key=lambda m: -model_size(m[0])):
+        if (model_size(cand) >= model_size(name) or not model_downloaded(cand)
+                or (cand.startswith("distil") and not english)):
+            continue
+        if tried is not None:
+            tried.append(cand)
+        try:
+            return load_whisper(cand), cand
+        except RuntimeError as e:
+            if not out_of_memory(e):
+                raise
+            print(f"{cand} doesn't fit either", flush=True)
+    return None
+
+
+def no_memory_notice(tried):
+    notify("Not enough GPU memory to dictate",
+           body=f"Tried {', '.join(tried)}. Close other GPU programs, or set ASR_DEVICE=cpu.")
+
+
 def load_whisper(name):
     print(f"loading {name} on {DEVICE} ...", flush=True)
     if DEVICE == "vulkan":
@@ -847,7 +943,8 @@ def load_whisper(name):
 def load_model():
     """Whisper on an NVIDIA GPU (default), on another GPU with ASR_DEVICE=vulkan, or on the CPU
     with ASR_DEVICE=cpu (int8, smaller model). A first use downloads the model; a model that
-    won't load falls back to the engine's default instead of failing at every start."""
+    won't load falls back to the engine's default instead of failing at every start, and one
+    that doesn't fit in GPU memory to a smaller one. Returns (model, the model it replaced)."""
     name, default = asr_model(), default_asr_model()
     for attempt in dict.fromkeys([name, default]):
         downloading = None
@@ -860,6 +957,16 @@ def load_model():
             sys.exit(f"pywhispercpp missing ({e}); run ./install.sh again")
         except Exception as e:
             close_notification(downloading)
+            if DEVICE != "cpu" and out_of_memory(e):
+                tried = [short_name(attempt)]
+                if found := load_smaller(attempt, tried):
+                    notify(f"⚠ GPU memory is short: using {found[1]}",
+                           body=f"Back to {tried[0]} once there's room")
+                    return found[0], tried[0]
+                # Exiting would restart the daemon every few seconds; wait for a take instead.
+                print(f"no GPU memory for any speech model ({e}); retrying on the next take", flush=True)
+                no_memory_notice(tried)
+                return None, tried[0]
             if attempt != default:
                 print(f"couldn't load {attempt} ({e}); using {default}", flush=True)
                 notify(f"Couldn't load the speech model {attempt}; using {default}. See the log.")
@@ -871,7 +978,7 @@ def load_model():
         if downloading:
             close_notification(downloading)
             notify(f"✅ Speech model {attempt} is ready")
-        return model
+        return model, None
 
 
 # xclip works on X11 and on Wayland desktops with XWayland (GNOME, KDE, most others);

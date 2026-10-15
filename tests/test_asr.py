@@ -176,6 +176,8 @@ def make_dictation(monkeypatch):
     d.np = np
     d.sd = types.SimpleNamespace(InputStream=FakeStream)
     d.model = FakeModel()
+    d.fallback_from = None
+    d.last_memory_notice = 0.0
     d.lock = threading.Lock()
     d.model_lock = threading.Lock()
     d.last_used = time.monotonic()
@@ -306,3 +308,115 @@ def test_no_unload_while_transcribing(monkeypatch):
     with d.model_lock:                        # a take is being transcribed
         d.unload_if_idle()
     assert d.model.loaded()
+
+
+# --- GPU memory fallback ---------------------------------------------------------------------
+
+class OOMModel(FakeModel):
+    """A model parked in RAM that no longer fits back on the GPU."""
+    is_loaded = False
+
+    def load(self):
+        raise RuntimeError("CUDA failed with error out of memory")
+
+
+def fake_gpu(monkeypatch, free_gb, loads):
+    """Pretend the GPU has free_gb free: bigger models fail to load as out of memory. Models
+    that load are appended to loads."""
+    monkeypatch.setattr(asr, "DEVICE", "cuda")
+    monkeypatch.setattr(asr, "free_gpu_gb", lambda: free_gb[0])
+    monkeypatch.setattr(asr, "model_downloaded", lambda name: True)
+    def load(name):
+        if asr.model_size(name) > free_gb[0]:
+            raise RuntimeError("CUDA failed with error out of memory")
+        loads.append(name)
+        return FakeModel()
+    monkeypatch.setattr(asr, "load_whisper", load)
+
+
+@pytest.mark.parametrize("free, expected, tried", [
+    (2.0, "medium", ["medium"]),
+    (1.2, "small", ["medium", "small"]),
+    (0.3, "base", ["medium", "small", "base"]),
+    (0.1, "tiny", ["medium", "small", "base", "tiny"]),
+    (0.05, None, ["medium", "small", "base", "tiny"]),
+])
+def test_load_smaller_tries_each_smaller_model_largest_first(monkeypatch, free, expected, tried):
+    fake_gpu(monkeypatch, [free], [])
+    names = []
+    found = asr.load_smaller("large-v3-turbo", names)
+    assert (found[1] if found else None) == expected
+    assert names == tried
+
+
+def test_load_smaller_uses_english_only_models_only_for_english(monkeypatch):
+    loads = []
+    fake_gpu(monkeypatch, [3.0], loads)
+    assert asr.load_smaller("large-v3")[1] == "large-v3-turbo"
+    asr.save_settings({"language": "en"})
+    assert asr.load_smaller("large-v3-turbo")[1] == "distil-large-v3.5"
+
+
+def test_reload_out_of_memory_falls_back_and_still_pastes(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model = OOMModel()
+    loads = []
+    fake_gpu(monkeypatch, [1.2], loads)
+    d.toggle()
+    d.toggle()
+    assert loads == ["small"]
+    assert d.pasted == ["take1"]
+    assert d.fallback_from == "large-v3-turbo"
+    assert any("using small" in n for n in notified)
+
+
+def test_no_model_fits_notifies_once_and_skips_the_take(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model = OOMModel()
+    fake_gpu(monkeypatch, [0.05], [])
+    d.toggle()
+    d.toggle()
+    assert d.pasted == []
+    assert sum("Not enough GPU memory" in n for n in notified) == 1
+
+
+def test_switches_back_when_memory_frees(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model = OOMModel()
+    free, loads = [1.2], []
+    fake_gpu(monkeypatch, free, loads)
+    d.toggle()
+    d.toggle()
+    free[0] = 4.0
+    d.toggle()
+    d.toggle()
+    assert loads == ["small", asr.asr_model()]
+    assert d.fallback_from is None
+    assert any("Back to large-v3-turbo" in n for n in notified)
+
+
+def test_startup_out_of_memory_falls_back(monkeypatch):
+    loads = []
+    fake_gpu(monkeypatch, [1.2], loads)
+    model, replaced = asr.load_model()
+    assert loads == ["small"] and replaced == "large-v3-turbo"
+
+
+def test_startup_with_no_room_waits_instead_of_exiting(monkeypatch):
+    fake_gpu(monkeypatch, [0.05], [])
+    assert asr.load_model() == (None, "large-v3-turbo")
+    assert notified == ["Not enough GPU memory to dictate"]
+
+
+def test_take_loads_a_model_once_there_is_room(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model, d.fallback_from = None, "large-v3-turbo"
+    free, loads = [0.05], []
+    fake_gpu(monkeypatch, free, loads)
+    d.toggle()
+    d.toggle()
+    assert d.pasted == [] and loads == []
+    free[0] = 1.2
+    d.toggle()
+    d.toggle()
+    assert loads == ["small"] and d.pasted == ["take1"]
