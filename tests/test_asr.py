@@ -519,3 +519,49 @@ def test_correct_last_never_offers_to_fix_a_rewritten_take(monkeypatch, tmp_path
     shown, _ = fake_dialogs(monkeypatch, "Dear team, the build passed.", [])
     asr.correct_last()
     assert not any("saved recording" in a for args in shown for a in args)
+
+
+class FakeKeyboard:
+    def __init__(self):
+        self.keys = []
+
+    def write(self, kind, code, val):
+        if val:
+            self.keys.append(code)
+
+    def syn(self):
+        pass
+
+
+def test_retype_erases_the_dictation_and_pastes_the_fix(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(asr.time, "sleep", lambda s: None)
+    d = make_dictation(monkeypatch)
+    d.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
+    d.kbd = FakeKeyboard()
+    with open(asr.retype_path(), "w") as f:
+        f.write('{"delete": 6, "text": "Hello"}')
+    assert d.retype()
+    assert d.kbd.keys == [14] * 6 and d.pasted == ["Hello"]
+    assert not os.path.exists(asr.retype_path())
+
+
+def test_correct_last_replaces_in_place_when_the_daemon_can(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    real_add_history("send it to jon")
+    jobs = []
+    def daemon(cmd):
+        with open(asr.retype_path()) as f:
+            jobs.append(f.read())
+        return "ok"
+    monkeypatch.setattr(asr, "request", daemon)
+    _, copied = fake_dialogs(monkeypatch, "send it to John", [])
+    asr.correct_last()
+    assert copied == []  # typed in place, so nothing to paste by hand
+    assert jobs == ['{"delete": 15, "text": "send it to John"}']  # 14 characters plus the space
+    assert notified[-1] == "✏️ Replaced the dictated text"
+
+
+def test_typed_length_counts_characters_not_accents():
+    assert asr.typed_length("café") == 4
+    assert asr.typed_length("café") == 4

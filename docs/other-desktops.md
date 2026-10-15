@@ -8,9 +8,10 @@ PyPI, the command is `~/.local/bin/tuxwhisper`; in a git clone, it's `~/tuxwhisp
 | Dictate | `~/.local/bin/tuxwhisper toggle` |
 | Dictate with LLM cleanup | `~/.local/bin/tuxwhisper rewrite` |
 | Save the last recording | `~/.local/bin/tuxwhisper save` |
+| Correct the last transcript | `~/.local/bin/tuxwhisper correct` |
 | Open the settings menu | `~/.local/bin/tuxwhisper settings` |
 
-On GNOME, setup binds them to F5, F3, F4 and Alt+F9; the examples below use F5 for dictation.
+On GNOME, setup binds them to F5, F3, F4, F6 and Alt+F9; the examples below use F5 for dictation.
 
 Some desktops don't expand `~` in shortcut commands (GNOME's don't); write `/home/<you>/…` there.
 

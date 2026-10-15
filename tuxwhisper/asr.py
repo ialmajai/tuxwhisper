@@ -7,7 +7,7 @@
   tuxwhisper save       save the last recording + its transcript for fine-tuning
   tuxwhisper settings   open the settings menu (needs zenity)
   tuxwhisper correct    fix the last transcript and learn from the changes
-  tuxwhisper bind       bind the default keys (F5, F3, F4, Alt+F9) as GNOME custom shortcuts
+  tuxwhisper bind       bind the default keys (F5, F3, F4, F6, Alt+F9) as GNOME custom shortcuts
   tuxwhisper uninstall  remove the service, shortcuts and launcher that setup added
 
 From a git clone, `./asr` runs the same commands.
@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 import tomllib
+import unicodedata
 import urllib.error
 import urllib.request
 import wave
@@ -159,7 +160,7 @@ def settings_shortcut():
     return None
 
 
-GNOME_KEYS = {"toggle": "F5", "rewrite": "F3", "save": "F4", "settings": "<Alt>F9"}
+GNOME_KEYS = {"toggle": "F5", "rewrite": "F3", "save": "F4", "correct": "F6", "settings": "<Alt>F9"}
 KEY_ACTIONS = {"toggle": "Dictate", "rewrite": "Dictate with LLM cleanup",
                "save": "Save the last recording", "settings": "Open this settings menu",
                "correct": "Correct the last transcript"}
@@ -543,7 +544,8 @@ class Dictation:
         if self.model:  # None: no GPU memory yet; ensure_model tries again at each take
             self.model.transcribe(np.zeros(RATE, dtype=np.float32))  # warm-up
         # Register every paste key so the menu can switch between them without a restart.
-        all_keys = sorted({getattr(ecodes, k) for keys in PASTE_KEYS.values() for k in keys})
+        all_keys = sorted({getattr(ecodes, k) for keys in PASTE_KEYS.values() for k in keys}
+                          | {ecodes.KEY_BACKSPACE})  # erases a dictation when it's corrected
         try:
             self.kbd = UInput({ecodes.EV_KEY: all_keys}, name=f"{APP}-keyboard")
         except (UInputError, OSError) as e:  # no udev rule for /dev/uinput: copy instead of typing
@@ -794,6 +796,27 @@ class Dictation:
         mark_last_saved(name)
         print(f"saved {name} ({takes} recordings, {total})", flush=True)
         notify(f"💾 Saved ({takes} recordings, {total})")
+
+    def retype(self):
+        """Replace the last dictation with its correction (from retype_path()): erase what was
+        typed with BackSpace, then paste the fix. False if there's no virtual keyboard."""
+        try:
+            with open(retype_path()) as f:
+                job = json.load(f)
+            os.remove(retype_path())
+        except (OSError, ValueError, TypeError):
+            return False
+        if self.kbd is None:
+            return False
+        time.sleep(0.4)  # the correction dialog just closed; let focus return to the app
+        k, ec = self.kbd, self.ec
+        for _ in range(job["delete"]):
+            for val in (1, 0):
+                k.write(ec.EV_KEY, ec.KEY_BACKSPACE, val)
+                k.syn()
+            time.sleep(0.004)
+        self.paste(job["text"] + " ")
+        return True
 
     def paste(self, text):
         # Clipboard + a paste shortcut handles any Unicode and works on X11 and Wayland.
@@ -1116,12 +1139,37 @@ def serve():
         conn, _ = srv.accept()
         with conn:
             cmd = conn.recv(64).decode(errors="replace").strip()
+            if cmd == "retype":  # the caller waits, so its next dialog can't steal the focus
+                conn.sendall(b"ok" if d.retype() else b"no")
+                continue
         if cmd == "toggle":
             d.press()
         elif cmd == "rewrite":
             d.press(rewrite=True)
         elif cmd == "save":
             d.save()
+
+
+def retype_path():
+    return os.path.join(os.environ.get("XDG_RUNTIME_DIR", ""), f"{APP}-retype.json")
+
+
+def request(cmd, timeout=60):
+    """Send cmd to the daemon and wait for its reply; None if it isn't running."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            s.connect(sock_path())
+            s.sendall(cmd.encode())
+            s.shutdown(socket.SHUT_WR)
+            return s.recv(16).decode()
+    except OSError:
+        return None
+
+
+def typed_length(text):
+    """How many BackSpaces erase text: one per character, not per combining accent."""
+    return sum(1 for c in text if not unicodedata.combining(c))
 
 
 def send(cmd):
@@ -1608,7 +1656,13 @@ def correct_last():
     fixed, before = fixed.strip(), last["text"]
     last["text"] = fixed
     save_history(items)
-    clipboard_set(fixed)
+    # Erase the dictation (it was typed with a trailing space) and type the fix in its place.
+    with open(retype_path(), "w") as f:
+        json.dump({"delete": typed_length(before) + 1, "text": fixed}, f)
+    replaced = request("retype") == "ok"
+    if not replaced:  # no daemon or no virtual keyboard: hand the fix over to paste by hand
+        clipboard_set(fixed)
+    done = "Replaced the dictated text." if replaced else "The corrected text is copied. Paste it with Ctrl+V."
 
     choices = [(f'Always write "{spoken}" as "{written}"' if kind == "rule"
                 else f'Add "{written}" to the vocabulary', kind, spoken, written, ticked)
@@ -1621,8 +1675,7 @@ def correct_last():
         rows = [x for i, c in enumerate(choices) for x in ("TRUE" if c[4] else "FALSE", str(i), c[0])]
         out = zenity("--list", "--checklist", "--title=Learn from this correction",
                      *fit(("", "Change"), [("", c[0]) for c in choices]),
-                     "--text=The corrected text is copied. Paste it with Ctrl+V.\n"
-                     "Tick what TuxWhisper should remember:",
+                     f"--text={done}\nTick what TuxWhisper should remember:",
                      "--column=", "--column=i", "--column=Change", "--hide-column=2",
                      "--print-column=2", "--separator= ", "--ok-label=Remember",
                      "--cancel-label=Skip", *rows)
@@ -1638,7 +1691,7 @@ def correct_last():
         else:
             fix_recording_text(spoken, written)
         learned.append(kind)
-    notify("📋 Corrected text copied; paste it with Ctrl+V",
+    notify("✏️ Replaced the dictated text" if replaced else "📋 Corrected text copied; paste it with Ctrl+V",
            body=f"Remembered {len(learned)} change{'s' * (len(learned) != 1)}" if learned else None)
 
 

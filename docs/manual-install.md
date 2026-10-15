@@ -115,8 +115,8 @@ On GNOME, run this in the repo folder:
 ./asr bind
 ```
 
-It binds the dictation, cleanup, save and settings keys as custom shortcuts (F5, F3, F4 and
-Alt+F9). It keeps your other shortcuts, keeps any
+It binds the dictation, cleanup, save, correct and settings keys as custom shortcuts (F5, F3,
+F4, F6 and Alt+F9). It keeps your other shortcuts, keeps any
 key you already changed, and skips a key another shortcut uses. Change them later under
 **Keys** in the settings menu, or in Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts. KDE, Hyprland, Sway, i3: see
 [Other desktops](other-desktops.md).

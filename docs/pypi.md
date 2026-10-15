@@ -27,9 +27,10 @@ it again.
 | **Dictation key** | Tap to start and stop, or hold to talk |
 | **Cleanup key** | The same, with local LLM cleanup |
 | **Save key** | Save the last recording for fine-tuning |
+| **Correct key** | Fix the last transcript in place |
 | **Settings key** | Settings menu |
 
-On GNOME, setup binds them to F5, F3, F4 and Alt+F9; change them under **Keys** in the settings
+On GNOME, setup binds them to F5, F3, F4, F6 and Alt+F9; change them under **Keys** in the settings
 menu.
 
 Documentation, other desktops and troubleshooting: <https://github.com/ialmajai/tuxwhisper>
