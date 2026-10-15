@@ -23,6 +23,9 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(asr, "REPLACEMENTS", str(tmp_path / "replacements.txt"))
     monkeypatch.setattr(asr, "VOCAB", str(tmp_path / "vocab.txt"))
     monkeypatch.setattr(asr, "RECORDINGS", str(tmp_path / "recordings"))
+    monkeypatch.setattr(asr, "MODES_FILE", str(tmp_path / "modes.txt"))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))  # history, retype job: never the real ones
+    monkeypatch.delenv("ASR_MODEL", raising=False)
     monkeypatch.setattr(asr, "sound", lambda name: None)
     monkeypatch.setattr(asr, "close_notification", lambda nid: None)
     monkeypatch.setattr(asr, "add_history", lambda text, **kw: None)
@@ -565,3 +568,60 @@ def test_correct_last_replaces_in_place_when_the_daemon_can(monkeypatch, tmp_pat
 def test_typed_length_counts_characters_not_accents():
     assert asr.typed_length("café") == 4
     assert asr.typed_length("café") == 4
+
+
+# --- robustness ------------------------------------------------------------------------------
+
+def test_settings_with_emoji_and_control_characters_round_trip():
+    asr.save_settings({"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"}, "x": "a\x7fb"})
+    assert asr.read_config() == {"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"}, "x": "a\x7fb"}
+
+
+def test_unreadable_settings_are_reported_and_kept(monkeypatch):
+    monkeypatch.delattr(asr.read_config, "warned", raising=False)
+    with open(asr.CONFIG, "w") as f:
+        f.write('mode = "unterminated\n')
+    assert asr.read_config() == {}
+    assert notified == ["Settings file is unreadable; using defaults"]
+    asr.save_settings({"sounds": False})
+    kept = [n for n in os.listdir(os.path.dirname(asr.CONFIG)) if ".unreadable-" in n]
+    assert len(kept) == 1 and asr.read_config() == {"sounds": False}
+
+
+def test_failed_take_is_reported_and_the_next_one_works(monkeypatch):
+    d = make_dictation(monkeypatch)
+    calls = []
+    def transcribe(audio, **_):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        return [types.SimpleNamespace(text="fine")], None
+    d.model.transcribe = transcribe
+    d.toggle()
+    d.toggle()
+    assert "Dictation failed" in notified and d.pasted == []
+    d.toggle()
+    d.toggle()
+    assert d.pasted == ["fine"]
+
+
+def test_mic_error_on_stop_does_not_wedge(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.toggle()
+    def broken():
+        raise OSError("device unplugged")
+    d.stream.stop = broken
+    d.toggle()
+    assert d.stream is None
+
+
+def test_list_rows_starting_with_a_dash_are_not_options(monkeypatch):
+    cmds = []
+    monkeypatch.setattr(asr.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or types.SimpleNamespace(
+        returncode=1, stdout=""))
+    for yad in (True, False):
+        monkeypatch.setattr(asr, "have_yad", lambda y=yad: y)
+        asr.zenity("--list", "--column=i", "--column=Text", "--ok-label=Copy", "0", "- Buy milk")
+    for cmd in cmds:
+        assert cmd[-3:] == ["--", "0", "- Buy milk"]
+        assert not any(a.startswith("--button") for a in cmd[cmd.index("--"):])

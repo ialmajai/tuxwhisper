@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 import tomllib
+import traceback
 import unicodedata
 import urllib.error
 import urllib.request
@@ -88,11 +89,18 @@ OLD_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def read_config():
-    """Only the settings changed in the menu."""
+    """Only the settings changed in the menu. An unreadable file counts as empty (defaults),
+    but is reported once, and save_settings keeps a copy of it rather than overwriting it."""
     try:
         with open(CONFIG, "rb") as f:
             return tomllib.load(f)
-    except (FileNotFoundError, tomllib.TOMLDecodeError):
+    except FileNotFoundError:
+        return {}
+    except tomllib.TOMLDecodeError as e:
+        if not getattr(read_config, "warned", False):
+            read_config.warned = True
+            print(f"{CONFIG} is unreadable ({e}); using default settings", flush=True)
+            notify("Settings file is unreadable; using defaults", body=CONFIG)
         return {}
 
 
@@ -688,9 +696,13 @@ class Dictation:
                 return
             # Drop the audio recorded between the key release (cut_at) and now.
             excess = int(max(0.0, time.monotonic() - cut_at) * RATE) if cut_at else 0
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+            try:
+                self.stream.stop()
+                self.stream.close()
+            except Exception as e:  # noqa: BLE001 - e.g. the mic was unplugged mid-take
+                print(f"microphone error on stop: {e}", flush=True)
+            finally:
+                self.stream = None
             close_notification(self.indicator)
             sound("device-removed")
             chunks, self.chunks = self.chunks, []
@@ -701,6 +713,9 @@ class Dictation:
             self.turn.wait_for(lambda: self.serving == ticket)
         try:
             self.process(chunks, excess, rewrite, warming)
+        except Exception:  # noqa: BLE001 - a failed take must not pass silently
+            traceback.print_exc()
+            notify("Dictation failed", body="See the log: journalctl --user -u tuxwhisper")
         finally:
             with self.turn:
                 self.serving += 1
@@ -1137,17 +1152,23 @@ def serve():
     srv.listen()
     while True:
         conn, _ = srv.accept()
-        with conn:
-            cmd = conn.recv(64).decode(errors="replace").strip()
-            if cmd == "retype":  # the caller waits, so its next dialog can't steal the focus
-                conn.sendall(b"ok" if d.retype() else b"no")
-                continue
-        if cmd == "toggle":
-            d.press()
-        elif cmd == "rewrite":
-            d.press(rewrite=True)
-        elif cmd == "save":
-            d.save()
+        try:
+            with conn:
+                conn.settimeout(2)
+                cmd = conn.recv(64).decode(errors="replace").strip()
+                if cmd == "retype":  # the caller waits, so its next dialog can't steal the focus
+                    conn.settimeout(None)
+                    conn.sendall(b"ok" if d.retype() else b"no")
+                    continue
+            if cmd == "toggle":
+                d.press()
+            elif cmd == "rewrite":
+                d.press(rewrite=True)
+            elif cmd == "save":
+                d.save()
+        except Exception:  # noqa: BLE001 - one failed command must not stop dictation
+            traceback.print_exc()
+            notify("TuxWhisper command failed", body="See the log: journalctl --user -u tuxwhisper")
 
 
 def retype_path():
@@ -1241,7 +1262,12 @@ def zenity(*args):
     """Show a zenity dialog, or the same dialog in yad when it's installed: yad opens about
     a second sooner than zenity 4."""
     args = [f"--title=🐧 {a.removeprefix('--title=')}" if a.startswith("--title=") else a for a in args]
+    rows = []
+    if "--list" in args:  # rows follow the options; "--" keeps a row like "- item" from reading as one
+        first_row = next((i for i, a in enumerate(args) if not a.startswith("-")), len(args))
+        args, rows = args[:first_row], ["--", *args[first_row:]]
     cmd = ["yad", *YAD_APP, "--center", *yad_args(args)] if have_yad() else ["zenity", *args]
+    cmd += rows
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         return None
@@ -1299,13 +1325,21 @@ def toml_value(v):
     if isinstance(v, bool):
         return str(v).lower()
     if isinstance(v, dict):  # inline table
-        return "{ " + ", ".join(f"{json.dumps(k)} = {json.dumps(x)}" for k, x in v.items()) + " }"
-    return json.dumps(v)
+        return "{ " + ", ".join(f"{toml_value(k)} = {toml_value(x)}" for k, x in v.items()) + " }"
+    # JSON escapes characters outside the BMP (emoji) as surrogate pairs, which TOML rejects.
+    return json.dumps(v, ensure_ascii=False).replace("\x7f", "\\u007F")
 
 
 def save_settings(s):
     """Write only the given settings, so unchanged ones keep following the environment."""
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    try:
+        with open(CONFIG, "rb") as f:
+            tomllib.load(f)
+    except tomllib.TOMLDecodeError:  # keep what can't be read, instead of overwriting it
+        os.replace(CONFIG, f"{CONFIG}.unreadable-{time.strftime('%Y%m%d-%H%M%S')}")
+    except FileNotFoundError:
+        pass
     with open(CONFIG, "w") as f:
         f.write("# Written by the settings menu; overrides the ASR_* environment variables.\n")
         f.writelines(f"{k} = {toml_value(v)}\n"
@@ -1415,7 +1449,7 @@ def menu_choice(rows):
                             *fit(("Setting", "Value"), [t[1:] for t in triples]),
                             "--center", text, "--column=Setting", "--column=Value", "--column=Help",
                             "--hide-column=3", "--tooltip-column=3", "--print-column=1",
-                            "--button=Close:1", "--button=Select:0",
+                            "--button=Close:1", "--button=Select:0", "--",
                             *[x for key, name, value in triples for x in (name, value, MENU_HELP[key])]],
                            capture_output=True, text=True)
         name = r.stdout.strip().split("|")[0]
