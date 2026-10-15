@@ -1048,7 +1048,8 @@ def load_model():
                                      body="<i>Dictation starts when it's ready</i>")
             model = load_whisper(attempt)
         except ImportError as e:
-            sys.exit(f"pywhispercpp missing ({e}); run ./install.sh again")
+            sys.exit(f"{e.name or 'a speech library'} is missing ({e}); run `tuxwhisper setup` "
+                     "(or ./install.sh in a git clone) again")
         except Exception as e:
             close_notification(downloading)
             if DEVICE != "cpu" and out_of_memory(e):
@@ -1188,6 +1189,13 @@ def daemon_running(sock):
 
 def serve():
     sock = sock_path()
+    # Held for the daemon's lifetime: a second daemon started during the first one's model
+    # load (~15 s, before the socket exists) would otherwise steal the socket and orphan it.
+    lock = open(f"{sock}.lock", "a")  # noqa: SIM115 - deliberately kept open
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(f"{APP} daemon is already running")
     if daemon_running(sock):  # don't steal the socket from a live daemon
         sys.exit(f"{APP} daemon is already running")
     close_stale_notifications()  # left open by a daemon that crashed or restarted mid-recording

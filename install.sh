@@ -156,6 +156,9 @@ else
         sed "s|^ExecStart=.*|ExecStart=\"$CMD\" serve|" tuxwhisper.service > "$UNIT_DIR/tuxwhisper.service"
         note "Installed $UNIT_DIR/tuxwhisper.service."
     fi
+    # Older unit files lack the restart limit, and existing ones are kept: add it as a drop-in.
+    mkdir -p "$UNIT_DIR/tuxwhisper.service.d"
+    printf '[Unit]\nStartLimitIntervalSec=300\nStartLimitBurst=3\n' > "$UNIT_DIR/tuxwhisper.service.d/restart-limit.conf"
     # One drop-in file names the engine; NVIDIA needs none (cuda is the default).
     rm -f "$UNIT_DIR/tuxwhisper.service.d/cpu.conf" "$UNIT_DIR/tuxwhisper.service.d/vulkan.conf"
     if [ "$engine" != cuda ]; then

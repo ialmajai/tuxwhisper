@@ -2,6 +2,10 @@
 Description=Local dictation daemon (faster-whisper)
 PartOf=graphical-session.target
 After=graphical-session.target
+# A daemon that can't start (no GPU, a missing library) stops retrying after 3 tries
+# in 5 minutes, instead of restarting and notifying forever.
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 # Optional settings, see docs/configuration.md:
