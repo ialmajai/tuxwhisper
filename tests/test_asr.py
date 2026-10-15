@@ -398,7 +398,7 @@ def test_switches_back_when_memory_frees(monkeypatch):
 def test_startup_out_of_memory_falls_back(monkeypatch):
     loads = []
     fake_gpu(monkeypatch, [1.2], loads)
-    model, replaced = asr.load_model()
+    _, replaced = asr.load_model()
     assert loads == ["small"] and replaced == "large-v3-turbo"
 
 
