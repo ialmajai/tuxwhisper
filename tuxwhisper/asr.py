@@ -601,6 +601,7 @@ class Dictation:
         self.refresh_hint()
         self.chunks = []
         self.last_press = 0.0
+        self.REPEAT_WINDOW = repeat_window()
         self.last_used = time.monotonic()
         self.model_lock = threading.Lock()  # held while the speech model is used, loaded or freed
         self.last_take = None  # (audio, text) of the latest transcription
@@ -612,7 +613,7 @@ class Dictation:
 
     # GNOME re-runs the shortcut on key auto-repeat (~every 0.1s here, after a 0.5s delay),
     # so a burst of presses means the key is held: treat it as push-to-talk.
-    REPEAT_WINDOW = 0.7   # press this soon after the previous one = auto-repeat
+    REPEAT_WINDOW = 0.7   # press this soon after the previous one = auto-repeat (set from GNOME)
     RELEASE_GAP = 0.35    # held key with no repeat for this long = released
     RELEASE_TAIL = 0.15   # audio kept after the last repeat (release is within ~0.11s of it)
 
@@ -639,6 +640,15 @@ class Dictation:
         while True:
             time.sleep(15)
             self.unload_if_idle()
+            self.restore_preferred_model()
+
+    def restore_preferred_model(self):
+        """Go back to the chosen model when there's room, between takes rather than during one."""
+        if self.fallback_from and self.stream is None and self.model_lock.acquire(blocking=False):
+            try:
+                self.try_preferred_model()
+            finally:
+                self.model_lock.release()
 
     def unload_if_idle(self):
         minutes = settings()["asr_unload_minutes"]
@@ -656,8 +666,6 @@ class Dictation:
         """Load the speech model back onto the GPU if it was freed (under a second from RAM).
         Without enough GPU memory, use the largest smaller model that fits; False if none does."""
         with self.model_lock:
-            if self.fallback_from:
-                self.try_preferred_model()
             if self.model is None:
                 return self.use_smaller_model(self.fallback_from)
             if speech_loaded(self.model):
@@ -701,45 +709,69 @@ class Dictation:
         notify(f"✅ Back to {self.fallback_from}", body="The GPU has room for it again")
         self.fallback_from = None
 
+    def _start(self, rewrite):
+        """Open the mic for a new take (under self.lock); the stream, or None if the mic failed."""
+        self.last_used = time.monotonic()
+        threading.Thread(target=self.ensure_model, daemon=True).start()  # overlaps the speech
+        self.chunks = []
+        self.rewrite = rewrite  # mode is set by the key that started the take
+        if rewrite:  # a cold load takes seconds; overlap it with the speech
+            self.warming = threading.Thread(target=warm_rewrite_model, daemon=True)
+            self.warming.start()
+        sound("device-added")  # 0.2 s; over before the mic finishes opening
+        try:
+            stream = self.sd.InputStream(
+                samplerate=RATE, channels=1, dtype="float32",
+                callback=lambda data, *_: self.chunks.append(data.copy()))
+            stream.start()
+        except Exception as e:  # noqa: BLE001 - unplugged, busy or no mic: stay ready
+            print(f"microphone unavailable: {e}", flush=True)
+            notify("🎙 Microphone unavailable; check that it's connected and not in use")
+            return None
+        self.stream, self.indicator = stream, None
+        return stream
+
+    def _announce(self, stream, rewrite):
+        """Show "Recording…" outside self.lock: notify-send -p can take a while, and holding the
+        lock would delay a quick stop. A stop that came first closes the notification."""
+        nid = notify(f"🎙 Recording ({current_mode()})…" if rewrite else "🎙 Recording…",
+                     persistent=True, body=self.hint)
+        with self.lock:
+            if self.stream is stream:
+                self.indicator = nid
+                return
+        close_notification(nid)
+
+    def _stop(self, cut_at):
+        """Close the mic (under self.lock); the take as (chunks, excess, rewrite, warming, ticket)."""
+        # Drop the audio recorded between the key release (cut_at) and now.
+        excess = int(max(0.0, time.monotonic() - cut_at) * RATE) if cut_at else 0
+        try:
+            self.stream.stop()
+            self.stream.close()
+        except Exception as e:  # noqa: BLE001 - e.g. the mic was unplugged mid-take
+            print(f"microphone error on stop: {e}", flush=True)
+        finally:
+            self.stream = None
+        close_notification(self.indicator)
+        sound("device-removed")
+        chunks, self.chunks = self.chunks, []
+        # This take's own mode: the next take may start before this one is pasted.
+        ticket, self.next_ticket = self.next_ticket, self.next_ticket + 1
+        return chunks, excess, self.rewrite, getattr(self, "warming", None), ticket
+
     def toggle(self, cut_at=None, rewrite=False):
         with self.lock:
             if self.stream is None:
-                self.last_used = time.monotonic()
-                threading.Thread(target=self.ensure_model, daemon=True).start()  # overlaps the speech
-                self.chunks = []
-                self.rewrite = rewrite  # mode is set by the key that started the take
-                if rewrite:  # a cold load takes seconds; overlap it with the speech
-                    self.warming = threading.Thread(target=warm_rewrite_model, daemon=True)
-                    self.warming.start()
-                sound("device-added")  # 0.2 s; over before the mic finishes opening
-                try:
-                    stream = self.sd.InputStream(
-                        samplerate=RATE, channels=1, dtype="float32",
-                        callback=lambda data, *_: self.chunks.append(data.copy()))
-                    stream.start()
-                except Exception as e:  # noqa: BLE001 - unplugged, busy or no mic: stay ready
-                    print(f"microphone unavailable: {e}", flush=True)
-                    notify("🎙 Microphone unavailable; check that it's connected and not in use")
-                    return
-                self.stream = stream
-                self.indicator = notify(f"🎙 Recording ({current_mode()})…" if rewrite else "🎙 Recording…",
-                                        persistent=True, body=self.hint)
-                return
-            # Drop the audio recorded between the key release (cut_at) and now.
-            excess = int(max(0.0, time.monotonic() - cut_at) * RATE) if cut_at else 0
-            try:
-                self.stream.stop()
-                self.stream.close()
-            except Exception as e:  # noqa: BLE001 - e.g. the mic was unplugged mid-take
-                print(f"microphone error on stop: {e}", flush=True)
-            finally:
-                self.stream = None
-            close_notification(self.indicator)
-            sound("device-removed")
-            chunks, self.chunks = self.chunks, []
-            # This take's own mode: the next take may start before this one is pasted.
-            rewrite, warming = self.rewrite, getattr(self, "warming", None)
-            ticket, self.next_ticket = self.next_ticket, self.next_ticket + 1
+                stream = self._start(rewrite)
+                take = None
+            else:
+                take = self._stop(cut_at)
+        if take is None:  # started (or the mic failed)
+            if stream is not None:
+                self._announce(stream, rewrite)
+            return
+        chunks, excess, rewrite, warming, ticket = take
         with self.turn:
             self.turn.wait_for(lambda: self.serving == ticket)
         try:
@@ -900,6 +932,18 @@ COPY_FAILED = "Couldn't copy the transcript; find it under Recent transcripts in
 
 
 # Speech model memory: faster-whisper parks the model in RAM (CTranslate2); WhisperCpp frees it.
+def repeat_window():
+    """How soon a second press counts as the key's auto-repeat: the first repeat comes after
+    the desktop's repeat delay (GNOME's default 500 ms), so allow that plus a margin. Users
+    with a longer delay (common for accessibility) would otherwise have a hold cut short."""
+    try:
+        r = subprocess.run(["gsettings", "get", "org.gnome.desktop.peripherals.keyboard", "delay"],
+                           capture_output=True, text=True, timeout=2)
+        return int(r.stdout.split()[-1]) / 1000 + 0.2
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
+        return Dictation.REPEAT_WINDOW
+
+
 def speech_loaded(model):
     return model.loaded() if hasattr(model, "loaded") else model.model.model_is_loaded
 

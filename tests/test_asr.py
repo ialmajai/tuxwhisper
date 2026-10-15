@@ -393,8 +393,7 @@ def test_switches_back_when_memory_frees(monkeypatch):
     d.toggle()
     d.toggle()
     free[0] = 4.0
-    d.toggle()
-    d.toggle()
+    d.restore_preferred_model()  # the idle thread does this between takes
     assert loads == ["small", asr.asr_model()]
     assert d.fallback_from is None
     assert any("Back to large-v3-turbo" in n for n in notified)
@@ -695,3 +694,34 @@ def test_atomic_write_leaves_no_temporary_files(tmp_path):
     with open(path) as f:
         assert f.read() == "two"
     assert os.listdir(tmp_path / "sub") == ["f.txt"]
+
+
+# --- push-to-talk timing and the take's hot path ---------------------------------------------
+
+@pytest.mark.parametrize("out, window", [("uint32 500\n", 0.7), ("uint32 900\n", 1.1), ("", 0.7)])
+def test_repeat_window_follows_the_desktop_repeat_delay(monkeypatch, out, window):
+    monkeypatch.setattr(asr.subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout=out))
+    assert asr.repeat_window() == pytest.approx(window)
+
+
+def test_stop_before_recording_notice_closes_it(monkeypatch):
+    d = make_dictation(monkeypatch)
+    closed = []
+    monkeypatch.setattr(asr, "close_notification", lambda nid: closed.append(nid))
+    def slow_notify(msg, **kw):
+        if kw.get("persistent"):
+            d.toggle()  # the take stops while the notice is still being shown
+            return "42"
+    monkeypatch.setattr(asr, "notify", slow_notify)
+    d.toggle()
+    assert "42" in closed and d.indicator is None
+
+
+def test_no_model_switch_while_recording(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.fallback_from = "large-v3-turbo"
+    loads = []
+    fake_gpu(monkeypatch, [4.0], loads)
+    d.stream = object()
+    d.restore_preferred_model()
+    assert loads == []
