@@ -121,9 +121,8 @@ key you already changed, and skips a key another shortcut uses. Change them late
 **Keys** in the settings menu, or in Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts. KDE, Hyprland, Sway, i3: see
 [Other desktops](other-desktops.md).
 
-The default dictation and cleanup keys, F5 and F3, replace page refresh and find-next in browsers
-and many editors. Ctrl+R and Ctrl+G
-still do those.
+The default dictation, cleanup and correct keys, F5, F3 and F6, replace page refresh, find-next
+and jump-to-address-bar in browsers and many editors. Ctrl+R, Ctrl+G and Ctrl+L still do those.
 
 To open the settings menu from your app grid, run this in the repo folder to add
 "TuxWhisper Settings":

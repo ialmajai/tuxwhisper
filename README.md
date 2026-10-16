@@ -86,8 +86,9 @@ Click into any text box, hold the dictation key, wait for the start sound, speak
 typed? See [Troubleshooting](docs/troubleshooting.md).
 
 > [!TIP]
-> The default dictation and cleanup keys, F5 and F3, replace page refresh and find-next in
-> browsers and many editors. Ctrl+R and Ctrl+G still do those, or pick other keys under **Keys**.
+> The default dictation, cleanup and correct keys, F5, F3 and F6, replace page refresh,
+> find-next and jump-to-address-bar in browsers and many editors. Ctrl+R, Ctrl+G and Ctrl+L
+> still do those, or pick other keys under **Keys**.
 
 ### Optional: LLM cleanup
 
