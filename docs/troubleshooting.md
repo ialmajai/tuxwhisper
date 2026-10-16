@@ -73,4 +73,16 @@ LLM cleanup on another machine with `OLLAMA_URL`.
 - **"LLM rewrite failed":** anything else, most often Ollama isn't running or the model isn't
   pulled. Check `ollama list` and `OLLAMA_URL`; the exact error is in the log
   (`journalctl --user -u tuxwhisper -n 20`).
+- **"Too long for LLM cleanup":** the take is too long to rewrite in one go (well over 1,000
+  words). TuxWhisper pastes it whole rather than a rewrite with words missing; dictate in
+  shorter takes.
+</details>
+
+<details>
+<summary><b>"Didn't catch that" or "Only caught a few words"</b></summary>
+
+Whisper found no speech, or much less than you recorded. Its silence filter skips speech it
+can't make out: too quiet, whispered, or a muted or wrong microphone. Speak up, check the input
+device and its volume in Settings → Sound, and wait for the start sound before speaking. Small
+speech models (base, tiny) miss quiet speech more often than large-v3-turbo.
 </details>

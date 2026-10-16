@@ -268,6 +268,10 @@ class Dictation:
         self.last_used = time.monotonic()
         print(f"[{len(audio) / store.RATE:.1f}s audio (-{excess / store.RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
               flush=True)
+        missed = missed_speech(len(audio) / store.RATE, text)
+        if missed:
+            print(f"  {missed[0]}: {missed[1]}", flush=True)
+            desktop.notify(missed[0], body=missed[1])
         if not text:
             return
         self.last_take = (audio, text)  # saved takes keep Whisper's text, matching the audio
@@ -393,6 +397,19 @@ class Dictation:
 
 COPY_FAILED = "Couldn't copy the transcript; find it under Recent transcripts in the settings menu"
 
+
+
+def missed_speech(seconds, text):
+    """(title, body) when Whisper heard far less than was recorded, else None. Its silence
+    filter drops speech it can't make out (too quiet, whispered, a muted mic), and without a
+    notice a long take would just vanish. Under a second is usually a stray key press."""
+    hint = "Speak up, or check the mic and its input volume in Settings → Sound."
+    words = len(text.split())
+    if not words and seconds >= 1:
+        return "Didn't catch that", f"No speech found in {seconds:.0f} s of audio. {hint}"
+    if seconds >= 10 and words < seconds / 3:  # normal speech is 2–3 words a second
+        return "Only caught a few words", f"{words} words from {seconds:.0f} s of audio; some may be missing. {hint}"
+    return None
 
 
 def repeat_window():

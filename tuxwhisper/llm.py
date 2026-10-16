@@ -128,6 +128,18 @@ def rewrite_task(text):
     return f"{task} {SELF_CORRECTION}" if CORRECTION_CUE.search(text) else task
 
 
+# Context sizes F3 picks from: a few fixed ones, since Ollama reloads the model when it changes.
+CONTEXT_SIZES = (1024, 4096, 8192)
+
+
+def context_size(system, text):
+    """The smallest context that holds the instructions, the transcript and a rewrite as long
+    as it (about 3 characters a token, plus JSON overhead); None if even the largest can't.
+    Too small a context doesn't fail: Ollama trims the input and the rewrite loses words."""
+    need = (len(system) + 2 * len(text)) // 3 + 200
+    return next((n for n in CONTEXT_SIZES if n >= need), None)
+
+
 def llm_cleanup(text, lang):
     """LLM-cleaned transcript, or the original text if Ollama fails or lacks GPU memory."""
     try:
@@ -135,16 +147,28 @@ def llm_cleanup(text, lang):
             print("rewrite skipped: model doesn't fit in GPU memory", flush=True)
             desktop.notify("Not enough GPU memory for LLM cleanup, pasted raw transcript")
             return text
+        system = REWRITE_SYSTEM.replace("{task}", rewrite_task(text)).replace(
+            "{language}", store.LANGUAGES.get(lang, f"the language with code {lang!r}"))
+        ctx = context_size(system, text)
+        if ctx is None:
+            print(f"rewrite skipped: {len(text)} characters is too long", flush=True)
+            desktop.notify("Too long for LLM cleanup, pasted raw transcript",
+                           body="Split long dictations into shorter takes.")
+            return text
         r = ollama("/api/chat", {
             "model": mode_model(), "stream": False, "keep_alive": llm_keep_alive(), "think": False,
-            "options": OLLAMA_OPTIONS,
+            "options": {**OLLAMA_OPTIONS, "num_ctx": ctx},
             "format": {"type": "object", "properties": {"cleaned": {"type": "string"}},
                        "required": ["cleaned"]},
-            "messages": [{"role": "system",
-                          "content": REWRITE_SYSTEM.replace("{task}", rewrite_task(text)).replace(
-                              "{language}", store.LANGUAGES.get(lang, f"the language with code {lang!r}"))},
+            "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": json.dumps({"transcript": text}, ensure_ascii=False)}],
-        })
+        }, timeout=30 + len(text) // 100)  # long takes take longer to rewrite
+        # A rewrite that ran out of room is missing words: never paste it as if it were whole.
+        if r.get("done_reason") == "length" or r.get("prompt_eval_count", 0) + r.get("eval_count", 0) >= ctx:
+            print(f"rewrite cut short at {ctx} tokens", flush=True)
+            desktop.notify("Too long for LLM cleanup, pasted raw transcript",
+                           body="Split long dictations into shorter takes.")
+            return text
         cleaned = json.loads(r["message"]["content"])["cleaned"].strip()
     except Exception as e:  # noqa: BLE001 - any failure falls back to the raw transcript
         print(f"rewrite failed: {e}", flush=True)

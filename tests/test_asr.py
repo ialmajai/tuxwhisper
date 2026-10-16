@@ -749,3 +749,51 @@ def test_download_verified_refuses_a_wrong_checksum(monkeypatch, tmp_path):
     with pytest.raises(OSError):
         engine.download_verified("http://x", str(tmp_path / "bad.bin"), "0" * 64)
     assert not (tmp_path / "bad.bin").exists()
+
+
+# --- takes that lose words -------------------------------------------------------------------
+
+@pytest.mark.parametrize("seconds, text, title", [
+    (0.5, "", None),                                     # a stray key press
+    (2.7, "", "Didn't catch that"),
+    (20.8, "How would it bother how would?", "Only caught a few words"),
+    (20.0, " ".join(["word"] * 40), None),               # normal speech with pauses
+    (6.0, "Yes.", None),                                 # short takes can be short
+])
+def test_missed_speech(seconds, text, title):
+    missed = daemon.missed_speech(seconds, text)
+    assert (missed[0] if missed else None) == title
+
+
+def test_empty_take_is_reported(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model.transcribe = lambda audio, **_: ([], None)
+    d.toggle()
+    d.toggle()
+    assert "Didn't catch that" in notified and d.pasted == []
+
+
+def test_context_size_grows_with_the_transcript():
+    assert llm.context_size("x" * 1500, "word " * 50) == 1024
+    assert llm.context_size("x" * 1500, "word " * 700) == 4096
+    assert llm.context_size("x" * 1500, "word " * 1100) == 8192
+    assert llm.context_size("x" * 1500, "word " * 3000) is None
+
+
+@pytest.mark.parametrize("reply", [
+    {"done_reason": "length", "prompt_eval_count": 10, "eval_count": 10},
+    {"done_reason": "stop", "prompt_eval_count": 1000, "eval_count": 30},  # input was trimmed
+])
+def test_cleanup_that_ran_out_of_room_pastes_the_raw_transcript(monkeypatch, reply):
+    monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
+    monkeypatch.setattr(llm, "ollama", lambda path, payload, timeout=30: {
+        **reply, "message": {"content": '{"cleaned": "half of it"}'}})
+    assert llm.llm_cleanup("um the whole take", "en") == "um the whole take"
+    assert notified == ["Too long for LLM cleanup, pasted raw transcript"]
+
+
+def test_far_too_long_take_skips_cleanup(monkeypatch):
+    monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
+    monkeypatch.setattr(llm, "ollama", lambda *a, **k: pytest.fail("should not be called"))
+    text = "word " * 5000
+    assert llm.llm_cleanup(text, "en") == text
