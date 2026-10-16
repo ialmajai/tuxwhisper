@@ -303,6 +303,19 @@ def edit_list(path, title, help_text):
             f.write(text + "\n")
 
 
+def edit_text(text, title, ok_label):
+    """Show text in an editable box; the edited text, or None if cancelled. The draft lives in
+    the private runtime dir, since it's dictated text."""
+    draft = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/nonexistent", f"{store.APP}-draft-{os.getpid()}.txt")
+    with open(draft, "w") as f:
+        f.write(text)
+    try:
+        return zenity("--text-info", "--editable", f"--filename={draft}", f"--title={title}",
+                      "--width=560", "--height=260", f"--ok-label={ok_label}")
+    finally:
+        os.remove(draft)
+
+
 def pick(title, options, current):
     # A plain list, not --radiolist: there, clicking a row's text doesn't tick its button,
     # so Select silently returned the old value.

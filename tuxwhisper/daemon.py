@@ -274,7 +274,8 @@ class Dictation:
             desktop.notify(missed[0], body=missed[1])
         if not text:
             return
-        self.last_take = (audio, text)  # saved takes keep Whisper's text, matching the audio
+        # Saved takes keep Whisper's text, matching the audio; [2] becomes its history entry.
+        take = self.last_take = [audio, text, None]
         if rewrite:
             t0 = time.time()
             # Say so only when the rewrite is slow (the model is still loading, usually).
@@ -292,7 +293,7 @@ class Dictation:
             print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
         text = store.apply_replacements(text)
         typed = self.paste(text + " ")
-        store.add_history(text, rewritten=rewrite, typed=typed)  # only a typed take can be retyped
+        take[2] = store.add_history(text, rewritten=rewrite, typed=typed)  # only a typed take can be retyped
         self.warn_if_clipped(audio)
         threading.Thread(target=self.refresh_hint, daemon=True).start()  # in case the key changed
 
@@ -311,8 +312,7 @@ class Dictation:
                    "in Settings → Sound")
 
     def save(self):
-        """Write the last take as recordings/<timestamp>.wav + a row in metadata.csv
-        (Hugging Face `audiofolder` layout)."""
+        """Offer to save the last take for fine-tuning, after the user checks its transcript."""
         take, self.last_take = self.last_take, None  # each take is saved at most once
         if take is None:
             if time.monotonic() - self.last_save < Dictation.REPEAT_WINDOW:
@@ -320,7 +320,24 @@ class Dictation:
             desktop.notify("Nothing to save")
             return
         self.last_save = time.monotonic()
-        audio, text = take
+        # Ask first, off the socket loop: dictation keys keep working while the dialog is open.
+        threading.Thread(target=self.confirm_save, args=(take,), daemon=True).start()
+
+    def confirm_save(self, take):
+        """Show the transcript for checking (a saved one must match the audio exactly), then
+        save. Cancelled: nothing is saved, and the take can still be saved with the key."""
+        audio, text, entry = take
+        confirmed = desktop.edit_text(text, "Save this recording for fine-tuning? Fix any wrong words first",
+                                      "Save")
+        if confirmed is None or not confirmed.strip():
+            if self.last_take is None:  # no newer take since: F4 can offer this one again
+                self.last_take = take
+            return
+        self.write_recording(audio, confirmed.strip(), entry)
+
+    def write_recording(self, audio, text, entry):
+        """Write the take as recordings/<timestamp>.wav + a row in metadata.csv (Hugging Face
+        `audiofolder` layout), and note it on its history entry for Correct last transcript."""
         os.makedirs(store.RECORDINGS, mode=0o700, exist_ok=True)
         os.chmod(store.RECORDINGS, 0o700)  # voice data: only you can read it
         name = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + ".wav"
@@ -338,7 +355,10 @@ class Dictation:
             out.writerow([name, text])
         takes, seconds = store.dataset_size(meta)
         total = f"{seconds / 60:.0f} min" if seconds >= 60 else f"{seconds:.0f} s"
-        store.mark_last_saved(name)
+        if entry:
+            store.update_history_entry(entry, recording=name)
+        else:
+            store.mark_last_saved(name)
         print(f"saved {name} ({takes} recordings, {total})", flush=True)
         desktop.notify(f"💾 Saved ({takes} recordings, {total})")
 

@@ -366,15 +366,7 @@ def correct_last():
         desktop.zenity("--info", "--title=Correct last transcript", "--text=Nothing dictated this session yet.")
         return
     last = items[-1]
-    with open(os.path.join(os.path.dirname(store.history_path()), f"{store.APP}-correct.txt"), "w") as f:
-        f.write(last["text"])
-        draft = f.name
-    try:
-        fixed = desktop.zenity("--text-info", "--editable", f"--filename={draft}",
-                       "--title=Correct last transcript", "--width=560", "--height=260",
-                       "--ok-label=Save")
-    finally:
-        os.remove(draft)
+    fixed = desktop.edit_text(last["text"], "Correct last transcript", "Save")
     if fixed is None or fixed.strip() == last["text"].strip():
         return
     fixed, before = fixed.strip(), last["text"]

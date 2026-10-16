@@ -26,7 +26,7 @@ it again.
 |-----|--------|
 | **Dictation key** | Tap to start and stop, or hold to talk |
 | **Cleanup key** | The same, with local LLM cleanup |
-| **Save key** | Save the last recording for fine-tuning |
+| **Save key** | Check and save the last recording for fine-tuning |
 | **Correct key** | Fix the last transcript in place |
 | **Settings key** | Settings menu |
 

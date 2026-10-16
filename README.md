@@ -43,7 +43,7 @@ Tested on GNOME (Wayland) with an NVIDIA GPU and in CPU mode, and on
 |-----|--------|
 | **Dictation key** | Tap to start, tap to stop, or hold to talk. The text is typed at your cursor. |
 | **Cleanup key** | The same, with [LLM cleanup](docs/llm-cleanup.md). |
-| **Save key** | [Save the last recording](docs/saving-takes.md) and its transcript for fine-tuning. |
+| **Save key** | [Save the last recording](docs/saving-takes.md) for fine-tuning, after you check its transcript. |
 | **Correct key** | Fix the last transcript: the fix replaces it, and TuxWhisper can remember it for next time. |
 | **Settings key** | Open the [settings menu](docs/configuration.md#settings-menu). |
 

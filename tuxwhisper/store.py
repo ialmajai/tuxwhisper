@@ -176,6 +176,8 @@ def add_history(text, rewritten=False, typed=False):
                  "typed": typed, "at": time.time()}
         with file_lock(history_path()):
             save_history((load_history() + [entry])[-20:])
+        return entry
+    return None
 
 
 def save_history(items):

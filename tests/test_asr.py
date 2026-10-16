@@ -218,12 +218,52 @@ def test_microphone_failure_does_not_wedge(monkeypatch):
     assert d.pasted == ["take1"]
 
 
+class InlineThread:
+    """threading.Thread that runs its target on start(), so a test sees the result at once."""
+    def __init__(self, target, args=(), daemon=None):
+        self.target, self.args = target, args
+
+    def start(self):
+        self.target(*self.args)
+
+
+def save_with_answer(monkeypatch, d, answer):
+    """Press the save key; the confirmation dialog returns answer (None = Cancel)."""
+    shown = []
+    monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
+    monkeypatch.setattr(desktop, "edit_text", lambda text, title, ok: shown.append(text) or answer)
+    d.save()
+    return shown
+
+
+def saved_rows():
+    with open(os.path.join(store.RECORDINGS, "metadata.csv")) as f:
+        return f.read().splitlines()[1:]
+
+
 def test_saved_recordings_are_private(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.last_take = (np.zeros(store.RATE, dtype=np.float32), "hello")
-    d.save()
+    d.last_take = [np.zeros(store.RATE, dtype=np.float32), "hello", None]
+    save_with_answer(monkeypatch, d, "hello")
     mode = stat.S_IMODE(os.stat(store.RECORDINGS).st_mode)
     assert mode == 0o700
+
+
+def test_save_asks_first_and_keeps_the_fixed_transcript(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.last_take = [np.zeros(store.RATE, dtype=np.float32), "send it to jon", None]
+    shown = save_with_answer(monkeypatch, d, "send it to John")
+    assert shown == ["send it to jon"]
+    assert [r.split(",", 1)[1] for r in saved_rows()] == ["send it to John"]
+
+
+def test_cancelled_save_writes_nothing_and_can_be_asked_again(monkeypatch):
+    d = make_dictation(monkeypatch)
+    take = [np.zeros(store.RATE, dtype=np.float32), "hello", None]
+    d.last_take = take
+    save_with_answer(monkeypatch, d, None)
+    assert not os.path.exists(store.RECORDINGS)
+    assert d.last_take is take  # the save key offers it again
 
 
 # --- clipboard ------------------------------------------------------------------------------
