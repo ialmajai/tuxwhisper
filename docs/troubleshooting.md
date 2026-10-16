@@ -18,8 +18,10 @@ Move the mic a little further from your mouth, or lower its input volume in Sett
 <summary><b>Nothing happens when I press the key</b></summary>
 
 Check `systemctl --user status tuxwhisper`. Right after login, the model may still be loading
-(watch for `ready` in the log). If you see "daemon is not running", start it with
-`systemctl --user start tuxwhisper`. Also check that the shortcut command uses the full path.
+(watch for `ready` in the log). If the daemon isn't running, pressing a dictation key starts it
+("Starting TuxWhisper…"); try again about 15 seconds later. If it keeps stopping, the log says
+why: `journalctl --user -u tuxwhisper -n 30`. Also check that the shortcut command uses the full
+path.
 </details>
 
 <details>

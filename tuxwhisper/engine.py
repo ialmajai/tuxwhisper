@@ -220,12 +220,24 @@ def no_memory_notice(tried):
 
 
 def load_whisper(name):
+    """Load a speech model and run it once. Running needs working memory beyond the weights,
+    and on a nearly full GPU that's where it runs out, so the out-of-memory fallbacks must
+    see it here, at load time, rather than crash the daemon's start or a take."""
+    import numpy as np
     print(f"loading {name} on {DEVICE} ...", flush=True)
     if DEVICE == "vulkan":
-        return WhisperCpp(name)
-    from faster_whisper import WhisperModel
-    on_cpu = DEVICE == "cpu"
-    return WhisperModel(name, device="cpu" if on_cpu else "cuda", compute_type="int8" if on_cpu else "float16")
+        model = WhisperCpp(name)
+    else:
+        from faster_whisper import WhisperModel
+        on_cpu = DEVICE == "cpu"
+        model = WhisperModel(name, device="cpu" if on_cpu else "cuda",
+                             compute_type="int8" if on_cpu else "float16")
+    try:
+        model.transcribe(np.zeros(16000, dtype=np.float32))  # warm-up
+    except Exception:
+        del model  # free its GPU memory before a caller tries a smaller one
+        raise
+    return model
 
 
 def load_model():

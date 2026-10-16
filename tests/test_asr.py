@@ -893,3 +893,37 @@ def test_silence_is_not_retried(monkeypatch):
     d.model = WhisperedModel("You")
     d.process([np.zeros((4 * 16000, 1), dtype=np.float32)], 0, False, None)
     assert d.pasted == [] and "Didn't catch that" in notified
+
+
+# --- the GPU fills up after loading; the daemon is down --------------------------------------
+
+class RunOOMModel(FakeModel):
+    """Loaded, but running it fails: another program took the GPU memory it needs."""
+    def detect_language(self, audio, **_):
+        raise RuntimeError("CUDA failed with error out of memory")
+
+    def transcribe(self, audio, **_):
+        raise RuntimeError("CUDA failed with error out of memory")
+
+
+def test_take_that_runs_out_of_gpu_memory_switches_down_and_still_pastes(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model = RunOOMModel()
+    loads = []
+    fake_gpu(monkeypatch, [1.2], loads)
+    d.toggle()
+    d.toggle()
+    assert loads == ["small"] and d.pasted == ["take1"]
+    assert any("using small" in n for n in notified)
+
+
+def test_key_starts_the_daemon_when_it_is_not_running(monkeypatch):
+    monkeypatch.setattr(daemon, "request", lambda cmd, timeout=5: None)
+    ran = []
+    monkeypatch.setattr(daemon.subprocess, "run", lambda cmd, **k: ran.append(cmd) or types.SimpleNamespace(
+        returncode=0))
+    with pytest.raises(SystemExit):
+        daemon.send("toggle")
+    assert ran == [["systemctl", "--user", "reset-failed", "tuxwhisper"],
+                   ["systemctl", "--user", "start", "--no-block", "tuxwhisper"]]
+    assert notified == ["Starting TuxWhisper…"]

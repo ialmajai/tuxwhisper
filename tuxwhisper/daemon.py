@@ -23,14 +23,11 @@ class Dictation:
     @classmethod
     def create(cls):
         """Load the speech model and open the virtual keyboard, then start dictating."""
-        import numpy as np
         import sounddevice as sd
         from evdev import UInput, ecodes
         from evdev.uinput import UInputError
 
-        model, fallback_from = engine.load_model()
-        if model:  # None: no GPU memory yet; ensure_model tries again at each take
-            model.transcribe(np.zeros(store.RATE, dtype=np.float32))  # warm-up
+        model, fallback_from = engine.load_model()  # warmed up; None if no GPU memory yet
         # Register every paste key so the menu can switch between them without a restart.
         all_keys = sorted({getattr(ecodes, k) for keys in store.PASTE_KEYS.values() for k in keys}
                           | {ecodes.KEY_BACKSPACE})  # erases a dictation when it's corrected
@@ -247,6 +244,28 @@ class Dictation:
                 self.serving += 1
                 self.turn.notify_all()
 
+    def transcribe(self, audio):
+        """The take's (text, language) (under self.model_lock), with whispered takes retried
+        without the voice filter."""
+        lang = store.settings()["language"] or self.model.detect_language(audio, vad_filter=True)[0]
+        # The English prompt and vocabulary make Whisper translate other languages into English.
+        english = lang == "en"
+        segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=True,
+                                            initial_prompt=engine.PROMPT if english else None,
+                                            hotwords=store.vocab() if english else None)
+        text = " ".join(s.text.strip() for s in segments).strip()
+        if not text and engine.sound_seconds(audio, store.RATE) >= engine.MIN_SOUND:
+            # The filter heard no voice in a take with sound: likely whispered. Try without
+            # it, keeping the result only if it fits the sound (Whisper may invent a phrase).
+            segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=False,
+                                                initial_prompt=engine.PROMPT if english else None,
+                                                hotwords=store.vocab() if english else None)
+            retry = " ".join(s.text.strip() for s in segments).strip()
+            ok = engine.plausible(retry, audio, store.RATE)
+            print(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})", flush=True)
+            text = retry if ok else ""
+        return text, lang
+
     def process(self, chunks, excess, rewrite, warming):
         """Transcribe one take, clean it up if asked, and paste it."""
         audio = self.np.concatenate(chunks)[:, 0] if chunks else []
@@ -258,23 +277,16 @@ class Dictation:
             return
         with self.model_lock:
             t0 = time.time()
-            lang = store.settings()["language"] or self.model.detect_language(audio, vad_filter=True)[0]
-            # The English prompt and vocabulary make Whisper translate other languages into English.
-            english = lang == "en"
-            segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=True,
-                                                initial_prompt=engine.PROMPT if english else None,
-                                                hotwords=store.vocab() if english else None)
-            text = " ".join(s.text.strip() for s in segments).strip()
-            if not text and engine.sound_seconds(audio, store.RATE) >= engine.MIN_SOUND:
-                # The filter heard no voice in a take with sound: likely whispered. Try without
-                # it, keeping the result only if it fits the sound (Whisper may invent a phrase).
-                segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=False,
-                                                    initial_prompt=engine.PROMPT if english else None,
-                                                    hotwords=store.vocab() if english else None)
-                retry = " ".join(s.text.strip() for s in segments).strip()
-                ok = engine.plausible(retry, audio, store.RATE)
-                print(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})", flush=True)
-                text = retry if ok else ""
+            try:
+                text, lang = self.transcribe(audio)
+            except RuntimeError as e:
+                if not engine.out_of_memory(e):
+                    raise
+                # The model is loaded, but another program took the GPU memory it needs to run.
+                print(f"no GPU memory to transcribe ({e})", flush=True)
+                engine.speech_unload(self.model)
+                fits = self.use_smaller_model(self.fallback_from or engine.short_name(engine.asr_model()))
+                text, lang = self.transcribe(audio) if fits else ("", None)
         self.last_used = time.monotonic()
         print(f"[{len(audio) / store.RATE:.1f}s audio (-{excess / store.RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
               flush=True)
@@ -536,5 +548,12 @@ def typed_length(text):
 def send(cmd):
     """Send a key's command to the daemon; it answers by closing the connection."""
     if request(cmd, timeout=5) is None:
-        desktop.notify(f"{store.APP} daemon is not running")
+        # Not running, e.g. systemd gave up after repeated start failures: start it again
+        # rather than leave the key doing nothing.
+        subprocess.run(["systemctl", "--user", "reset-failed", store.APP], capture_output=True)
+        started = subprocess.run(["systemctl", "--user", "start", "--no-block", store.APP],
+                                 capture_output=True).returncode == 0
+        desktop.notify("Starting TuxWhisper…" if started else f"{store.APP} isn't running",
+                       body="Try again in about 15 seconds." if started
+                       else "Start it with: systemctl --user start tuxwhisper")
         sys.exit(1)
