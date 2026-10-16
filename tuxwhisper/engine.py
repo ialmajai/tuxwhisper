@@ -1,6 +1,7 @@
 """Speech models: faster-whisper or whisper.cpp, loading them and fitting them in GPU memory."""
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -34,6 +35,51 @@ VAD_MODEL_SHA256 = "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04e
 # Whisper imitates the style of its prompt. large-v3-turbo often drops capitals and
 # punctuation on casual speech; a punctuated prompt brings them back. Set to "" to disable.
 PROMPT = os.environ.get("ASR_PROMPT", "Hello. This is a sentence, with punctuation and capitals.") or None
+
+
+# Whispered words: the voice-activity filter drops them (it looks for voiced speech), while
+# Whisper itself hears them fine. Without the filter, though, Whisper sometimes invents a stock
+# phrase ("God bless you" from a whispered "yes") or repeats its prompt; those are caught by
+# checking the transcript could have been said in the sound there is.
+MIN_SOUND = 0.2       # seconds of sound before a take counts as more than silence
+MAX_SYLLABLE_RATE = 8  # syllables per second of sound; fast speech is about 6-7
+
+
+def sound_seconds(audio, rate=16000):
+    """How long the take contains sound: 20 ms frames well above its own quietest ones. Not the
+    first-to-last span, which breaths and clicks stretch."""
+    import numpy as np
+    n = rate // 50
+    frames = np.asarray(audio[: len(audio) // n * n], dtype="float32").reshape(-1, n)
+    if not len(frames):
+        return 0.0
+    level = np.sqrt((frames ** 2).mean(axis=1)) + 1e-6
+    return float((level > np.percentile(level, 10) * 3).sum()) * n / rate
+
+
+def syllables(text):
+    """Rough syllable count: vowel groups in Latin-script words, about one per 2.5 letters in
+    other scripts. Enough to tell "Yes" from "God bless you"."""
+    count = 0
+    for word in re.findall(r"\w+", text.lower()):
+        if word.isascii():
+            count += max(1, len(re.findall(r"[aeiouy]+", word.removesuffix("e") or word)))
+        else:
+            count += max(1, round(len(word) / 2.5))
+    return count
+
+
+def prompt_echo(text):
+    """Whether text only repeats (part of) the style prompt, which Whisper does on near-silence."""
+    words = re.sub(r"\W+", " ", text.lower()).strip()
+    return bool(PROMPT) and bool(words) and words in re.sub(r"\W+", " ", PROMPT.lower())
+
+
+def plausible(text, audio, rate=16000):
+    """Whether text could have been said in the sound the take contains."""
+    if not re.search(r"\w", text) or prompt_echo(text):
+        return False
+    return syllables(text) / max(sound_seconds(audio, rate), 0.1) <= MAX_SYLLABLE_RATE
 
 
 # Speech model memory: faster-whisper parks the model in RAM (CTranslate2); WhisperCpp frees it.

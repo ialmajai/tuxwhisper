@@ -265,6 +265,16 @@ class Dictation:
                                                 initial_prompt=engine.PROMPT if english else None,
                                                 hotwords=store.vocab() if english else None)
             text = " ".join(s.text.strip() for s in segments).strip()
+            if not text and engine.sound_seconds(audio, store.RATE) >= engine.MIN_SOUND:
+                # The filter heard no voice in a take with sound: likely whispered. Try without
+                # it, keeping the result only if it fits the sound (Whisper may invent a phrase).
+                segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=False,
+                                                    initial_prompt=engine.PROMPT if english else None,
+                                                    hotwords=store.vocab() if english else None)
+                retry = " ".join(s.text.strip() for s in segments).strip()
+                ok = engine.plausible(retry, audio, store.RATE)
+                print(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})", flush=True)
+                text = retry if ok else ""
         self.last_used = time.monotonic()
         print(f"[{len(audio) / store.RATE:.1f}s audio (-{excess / store.RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
               flush=True)

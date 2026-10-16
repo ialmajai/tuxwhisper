@@ -81,8 +81,12 @@ LLM cleanup on another machine with `OLLAMA_URL`.
 <details>
 <summary><b>"Didn't catch that" or "Only caught a few words"</b></summary>
 
-Whisper found no speech, or much less than you recorded. Its silence filter skips speech it
-can't make out: too quiet, whispered, or a muted or wrong microphone. Speak up, check the input
-device and its volume in Settings → Sound, and wait for the start sound before speaking. Small
-speech models (base, tiny) miss quiet speech more often than large-v3-turbo.
+Whisper found no speech, or much less than you recorded: too quiet, or a muted or wrong
+microphone. Speak up, check the input device and its volume in Settings → Sound, and wait for
+the start sound before speaking.
+
+Whispering works for short words: the voice filter skips whispers, so when it finds nothing in
+a take that has sound, TuxWhisper listens again without it. It keeps that result only if it
+could have been said in the sound there is, since Whisper sometimes invents a phrase ("God
+bless you" from a whispered "yes"); otherwise you see this notice.
 </details>

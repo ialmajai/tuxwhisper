@@ -837,3 +837,59 @@ def test_far_too_long_take_skips_cleanup(monkeypatch):
     monkeypatch.setattr(llm, "ollama", lambda *a, **k: pytest.fail("should not be called"))
     text = "word " * 5000
     assert llm.llm_cleanup(text, "en") == text
+
+
+# --- whispered words -------------------------------------------------------------------------
+
+def burst(seconds, total=4.0, level=0.01, rate=16000):
+    """A take of total seconds: faint noise with seconds of louder sound in the middle."""
+    rng = np.random.default_rng(0)
+    a = rng.normal(0, 0.0002, int(total * rate)).astype(np.float32)
+    start = int((total - seconds) / 2 * rate)
+    a[start:start + int(seconds * rate)] += rng.normal(0, level, int(seconds * rate)).astype(np.float32)
+    return a
+
+
+def test_sound_seconds_counts_sound_not_the_whole_take():
+    assert engine.sound_seconds(np.zeros(4 * 16000, dtype=np.float32)) == 0.0
+    assert engine.sound_seconds(burst(0.5)) == pytest.approx(0.5, abs=0.06)
+
+
+@pytest.mark.parametrize("text, sound, ok", [
+    ("Yes.", 0.3, True),
+    ("Thank you.", 0.3, True),                 # 6.7 syllables a second: fast but possible
+    ("God bless you.", 0.3, False),            # invented from a whispered "yes": 10 a second
+    ("This is a sentence, with punctuation and capitals.", 2.0, False),  # the prompt echoed
+    (". . . . .", 1.0, False),
+])
+def test_plausible(text, sound, ok):
+    assert engine.plausible(text, burst(sound)) is ok
+
+
+class WhisperedModel(FakeModel):
+    """Like Whisper on a whispered take: the voice filter finds nothing; without it, `heard`."""
+    def __init__(self, heard):
+        super().__init__()
+        self.heard = heard
+
+    def transcribe(self, audio, vad_filter=True, **_):
+        return ([] if vad_filter else [types.SimpleNamespace(text=self.heard)]), None
+
+
+@pytest.mark.parametrize("heard, sound, typed", [
+    ("Yes.", 0.4, ["Yes."]),
+    ("God bless you.", 0.3, []),
+])
+def test_whispered_take_is_retried_without_the_voice_filter(monkeypatch, heard, sound, typed):
+    d = make_dictation(monkeypatch)
+    d.model = WhisperedModel(heard)
+    d.process([burst(sound)[:, None]], 0, False, None)
+    assert d.pasted == typed
+    assert ("Didn't catch that" in notified) is (not typed)
+
+
+def test_silence_is_not_retried(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model = WhisperedModel("You")
+    d.process([np.zeros((4 * 16000, 1), dtype=np.float32)], 0, False, None)
+    assert d.pasted == [] and "Didn't catch that" in notified
