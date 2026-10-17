@@ -1,4 +1,5 @@
 """Desktop integration: notifications, sounds, the clipboard, GNOME shortcuts and dialogs."""
+import contextlib
 import functools
 import os
 import re
@@ -6,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 
 from tuxwhisper import store
@@ -262,9 +264,15 @@ def yad_args(args):
     return [*out, f"--button={cancel}:1", f"--button={ok}:0"]
 
 
+# Exit codes for Cancel, No or closing the window: 1 in zenity; in yad, 1 for our Cancel and No
+# buttons (see yad_args) and 252 for closing the window. Anything else means the dialog failed.
+DIALOG_CANCELLED = (1, 252)
+
+
 def zenity(*args):
     """Show a zenity dialog, or the same dialog in yad when it's installed: yad opens about
-    a second sooner than zenity 4."""
+    a second sooner than zenity 4. None if cancelled; raises RuntimeError if the dialog
+    couldn't be shown, so a missing or broken tool isn't mistaken for the user's Cancel."""
     args = [f"--title=🐧 {a.removeprefix('--title=')}" if a.startswith("--title=") else a for a in args]
     rows = []
     if "--list" in args:  # rows follow the options; "--" keeps a row like "- item" from reading as one
@@ -272,9 +280,14 @@ def zenity(*args):
         args, rows = args[:first_row], ["--", *args[first_row:]]
     cmd = ["yad", *YAD_APP, "--center", *yad_args(args)] if have_yad() else ["zenity", *args]
     cmd += rows
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError as e:
+        raise RuntimeError(f"{cmd[0]} isn't installed") from e
+    if r.returncode in DIALOG_CANCELLED:
         return None
+    if r.returncode != 0:
+        raise RuntimeError(f"{cmd[0]} failed ({r.returncode}): {r.stderr.strip()}")
     out = r.stdout.strip()
     return out.removesuffix("|") if have_yad() and "--list" in args else out  # yad ends list rows with |
 
@@ -305,15 +318,20 @@ def edit_list(path, title, help_text):
 
 def edit_text(text, title, ok_label):
     """Show text in an editable box; the edited text, or None if cancelled. The draft lives in
-    the private runtime dir, since it's dictated text."""
-    draft = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/nonexistent", f"{store.APP}-draft-{os.getpid()}.txt")
-    with open(draft, "w") as f:
-        f.write(text)
+    the private runtime dir, since it's dictated text, and never anywhere else; a file of its
+    own, since two dialogs can be open at once."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        raise OSError("XDG_RUNTIME_DIR is not set; run this from a desktop session")
+    fd, draft = tempfile.mkstemp(prefix=f"{store.APP}-draft-", suffix=".txt", dir=runtime)
     try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
         return zenity("--text-info", "--editable", f"--filename={draft}", f"--title={title}",
                       "--width=560", "--height=260", f"--ok-label={ok_label}")
     finally:
-        os.remove(draft)
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(draft)
 
 
 def pick(title, options, current):

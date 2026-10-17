@@ -257,6 +257,75 @@ def test_save_asks_first_and_keeps_the_fixed_transcript(monkeypatch):
     assert [r.split(",", 1)[1] for r in saved_rows()] == ["send it to John"]
 
 
+def test_save_dialog_that_fails_is_reported_and_the_take_kept(monkeypatch):
+    d = make_dictation(monkeypatch)
+    take = d.last_take = [np.zeros(store.RATE, dtype=np.float32), "hello", None]
+    monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
+    def missing(*a):
+        raise RuntimeError("zenity isn't installed")
+    monkeypatch.setattr(desktop, "edit_text", missing)
+    d.save()
+    assert notified == ["Couldn't open the save dialog"] and d.last_take is take
+
+
+def test_save_that_fails_to_write_is_reported_and_the_take_kept(monkeypatch):
+    d = make_dictation(monkeypatch)
+    take = d.last_take = [np.zeros(store.RATE, dtype=np.float32), "hello", None]
+    def full(*a):
+        raise OSError("No space left on device")
+    d.write_recording = full
+    save_with_answer(monkeypatch, d, "hello")
+    assert notified == ["Couldn't save the recording"] and d.last_take is take
+
+
+def test_cancelled_save_does_not_bring_back_an_older_take(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.last_take = [np.zeros(store.RATE, dtype=np.float32), "old", None]
+    monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
+    def dialog(text, title, ok):
+        # While it's open, a newer take is dictated and the save key takes it for its own dialog.
+        d.take_id += 1
+        d.last_take = None
+        # ... and then this one is cancelled (returns None)
+    monkeypatch.setattr(desktop, "edit_text", dialog)
+    d.save()
+    assert d.last_take is None
+
+
+@pytest.mark.parametrize("code, result", [(0, "text"), (1, None), (252, None), (5, RuntimeError)])
+def test_dialog_failure_is_not_mistaken_for_cancel(monkeypatch, code, result):
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **k: types.SimpleNamespace(
+        returncode=code, stdout="text\n", stderr="cannot open display"))
+    if result is RuntimeError:
+        with pytest.raises(RuntimeError):
+            desktop.zenity("--entry")
+    else:
+        assert desktop.zenity("--entry") == result
+
+
+def test_missing_dialog_tool_raises(monkeypatch):
+    def missing(cmd, **k):
+        raise FileNotFoundError(cmd[0])
+    monkeypatch.setattr(desktop.subprocess, "run", missing)
+    with pytest.raises(RuntimeError):
+        desktop.zenity("--entry")
+
+
+def test_edit_text_drafts_are_private_unique_and_removed(monkeypatch, tmp_path):
+    seen = []
+    def dialog(*args):
+        path = next(a for a in args if a.startswith("--filename=")).removeprefix("--filename=")
+        seen.append(path)
+        os.remove(path)  # already gone (e.g. the session ended) must not raise
+        return "x"
+    monkeypatch.setattr(desktop, "zenity", dialog)
+    assert desktop.edit_text("a", "t", "OK") == "x" and desktop.edit_text("a", "t", "OK") == "x"
+    assert seen[0] != seen[1] and all(os.path.dirname(p) == str(tmp_path) for p in seen)
+    monkeypatch.delenv("XDG_RUNTIME_DIR")
+    with pytest.raises(OSError):
+        desktop.edit_text("a", "t", "OK")
+
+
 def test_cancelled_save_writes_nothing_and_can_be_asked_again(monkeypatch):
     d = make_dictation(monkeypatch)
     take = [np.zeros(store.RATE, dtype=np.float32), "hello", None]
@@ -426,13 +495,13 @@ def test_switches_back_when_memory_frees(monkeypatch):
 def test_startup_out_of_memory_falls_back(monkeypatch):
     loads = []
     fake_gpu(monkeypatch, [1.2], loads)
-    _, replaced = engine.load_model()
-    assert loads == ["small"] and replaced == "large-v3-turbo"
+    _, name, replaced = engine.load_model()
+    assert loads == ["small"] and name == "small" and replaced == "large-v3-turbo"
 
 
 def test_startup_with_no_room_waits_instead_of_exiting(monkeypatch):
     fake_gpu(monkeypatch, [0.05], [])
-    assert engine.load_model() == (None, "large-v3-turbo")
+    assert engine.load_model() == (None, None, "large-v3-turbo")
     assert notified == ["Not enough GPU memory to dictate"]
 
 
@@ -832,6 +901,13 @@ def test_cleanup_that_ran_out_of_room_pastes_the_raw_transcript(monkeypatch, rep
     assert notified == ["Too long for LLM cleanup, pasted raw transcript"]
 
 
+def test_cleanup_without_token_counts_is_kept(monkeypatch):
+    monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
+    monkeypatch.setattr(llm, "ollama", lambda path, payload, timeout=30: {
+        "done_reason": "stop", "prompt_eval_count": 0, "message": {"content": '{"cleaned": "The take."}'}})
+    assert llm.llm_cleanup("um the take", "en") == "The take."
+
+
 def test_far_too_long_take_skips_cleanup(monkeypatch):
     monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
     monkeypatch.setattr(llm, "ollama", lambda *a, **k: pytest.fail("should not be called"))
@@ -853,6 +929,23 @@ def burst(seconds, total=4.0, level=0.01, rate=16000):
 def test_sound_seconds_counts_sound_not_the_whole_take():
     assert engine.sound_seconds(np.zeros(4 * 16000, dtype=np.float32)) == 0.0
     assert engine.sound_seconds(burst(0.5)) == pytest.approx(0.5, abs=0.06)
+
+
+def test_sound_seconds_counts_a_take_that_is_sound_throughout():
+    assert engine.sound_seconds(burst(4.0)) == pytest.approx(4.0, abs=0.06)
+
+
+def test_sound_seconds_ignores_a_click_in_digital_silence():
+    a = np.zeros(4 * 16000, dtype=np.float32)
+    a[30000:30010] = 0.01
+    assert engine.sound_seconds(a) <= 0.02  # the click's own frame at most, not the whole take
+
+
+def test_syllables_count_each_cjk_character():
+    assert engine.syllables("你好") == 2
+    assert engine.syllables("ありがとう") == 5
+    assert engine.syllables("안녕하세요") == 5
+    assert engine.syllables("Да") == 1  # other scripts: about one per 2.5 letters
 
 
 @pytest.mark.parametrize("text, sound, ok", [
@@ -917,13 +1010,72 @@ def test_take_that_runs_out_of_gpu_memory_switches_down_and_still_pastes(monkeyp
     assert any("using small" in n for n in notified)
 
 
-def test_key_starts_the_daemon_when_it_is_not_running(monkeypatch):
+def fake_systemctl(monkeypatch, state):
+    """The daemon isn't answering and systemd reports it as state; the commands run are returned."""
     monkeypatch.setattr(daemon, "request", lambda cmd, timeout=5: None)
     ran = []
     monkeypatch.setattr(daemon.subprocess, "run", lambda cmd, **k: ran.append(cmd) or types.SimpleNamespace(
-        returncode=0))
+        returncode=0, stdout=state + "\n"))
     with pytest.raises(SystemExit):
         daemon.send("toggle")
-    assert ran == [["systemctl", "--user", "reset-failed", "tuxwhisper"],
-                   ["systemctl", "--user", "start", "--no-block", "tuxwhisper"]]
+    return ran
+
+
+@pytest.mark.parametrize("state", ["failed", "inactive"])
+def test_key_starts_the_daemon_when_it_is_not_running(monkeypatch, state):
+    assert fake_systemctl(monkeypatch, state)[1:] == [["systemctl", "--user", "reset-failed", "tuxwhisper"],
+                                                      ["systemctl", "--user", "start", "--no-block", "tuxwhisper"]]
     assert notified == ["Starting TuxWhisper…"]
+
+
+@pytest.mark.parametrize("state", ["activating", "active"])
+def test_key_does_not_restart_a_daemon_still_loading(monkeypatch, state):
+    assert fake_systemctl(monkeypatch, state) == [["systemctl", "--user", "is-active", "tuxwhisper"]]
+    assert notified == ["TuxWhisper is still starting"]
+
+
+def test_take_that_runs_out_of_memory_again_after_switching_down_is_reported(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model = RunOOMModel()
+    fake_gpu(monkeypatch, [1.2], [])
+    monkeypatch.setattr(engine, "load_whisper", lambda name: RunOOMModel())  # loads, then can't run
+    d.toggle()
+    d.toggle()
+    assert d.pasted == [] and notified[-1] == "Not enough GPU memory to dictate"
+
+
+def test_take_with_no_model_that_fits_shows_only_the_memory_notice(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model = RunOOMModel()
+    fake_gpu(monkeypatch, [0.05], [])
+    d.toggle()
+    d.toggle()
+    assert "Not enough GPU memory to dictate" in notified and "Didn't catch that" not in notified
+
+
+def test_out_of_memory_steps_down_from_the_model_in_use(monkeypatch):
+    d = make_dictation(monkeypatch)
+    loads = []
+    fake_gpu(monkeypatch, [1.6], loads)
+    d.model, d.model_name, d.fallback_from = RunOOMModel(), "medium", "large-v3-turbo"
+    d.toggle()
+    d.toggle()
+    assert loads == ["small"] and d.model_name == "small"  # medium would fit, but just failed
+    assert d.fallback_from == "large-v3-turbo"  # still back to the chosen model once there's room
+
+
+def test_failed_warm_up_frees_the_model(monkeypatch):
+    freed = []
+
+    class Broken:
+        def transcribe(self, audio):
+            raise RuntimeError("CUDA failed with error out of memory")
+
+        def unload(self):
+            freed.append(True)
+
+    monkeypatch.setattr(engine, "DEVICE", "vulkan")
+    monkeypatch.setattr(engine, "WhisperCpp", lambda name: Broken())
+    with pytest.raises(RuntimeError):
+        engine.load_whisper("tiny")
+    assert freed == [True]

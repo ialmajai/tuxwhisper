@@ -1,4 +1,5 @@
 """Speech models: faster-whisper or whisper.cpp, loading them and fitting them in GPU memory."""
+import contextlib
 import hashlib
 import os
 import re
@@ -43,25 +44,42 @@ PROMPT = os.environ.get("ASR_PROMPT", "Hello. This is a sentence, with punctuati
 # checking the transcript could have been said in the sound there is.
 MIN_SOUND = 0.2       # seconds of sound before a take counts as more than silence
 MAX_SYLLABLE_RATE = 8  # syllables per second of sound; fast speech is about 6-7
+# Frame levels (RMS) bounding the sound threshold. The floor keeps digital silence with a click
+# from counting as sound; it sits below a quiet mic's own hiss (about 6e-5 here, three times that
+# is the usual threshold), since whispers peak at only 2e-3. The cap keeps a take that is sound
+# throughout, whose quietest frames are sound too, from counting as none.
+SOUND_FLOOR, SOUND_CAP = 1e-4, 1e-3
 
 
 def sound_seconds(audio, rate=16000):
-    """How long the take contains sound: 20 ms frames well above its own quietest ones. Not the
-    first-to-last span, which breaths and clicks stretch."""
+    """How long the take contains sound: 20 ms frames well above its own quietest ones (within
+    SOUND_FLOOR and SOUND_CAP). Not the first-to-last span, which breaths and clicks stretch."""
     import numpy as np
     n = rate // 50
     frames = np.asarray(audio[: len(audio) // n * n], dtype="float32").reshape(-1, n)
     if not len(frames):
         return 0.0
     level = np.sqrt((frames ** 2).mean(axis=1)) + 1e-6
-    return float((level > np.percentile(level, 10) * 3).sum()) * n / rate
+    threshold = max(SOUND_FLOOR, min(np.percentile(level, 10) * 3, SOUND_CAP))
+    return float((level > threshold).sum()) * n / rate
+
+
+# Han, Hiragana, Katakana and Hangul syllables.
+CJK = re.compile("[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
 
 
 def syllables(text):
-    """Rough syllable count: vowel groups in Latin-script words, about one per 2.5 letters in
-    other scripts. Enough to tell "Yes" from "God bless you"."""
+    """Rough syllable count: vowel groups in Latin-script words, one per character in Chinese,
+    Japanese and Korean (each is a syllable), about one per 2.5 letters in other scripts.
+    Enough to tell "Yes" from "God bless you"."""
     count = 0
     for word in re.findall(r"\w+", text.lower()):
+        cjk = len(CJK.findall(word))
+        if cjk:
+            count += cjk
+            word = CJK.sub("", word)
+            if not word:
+                continue
         if word.isascii():
             count += max(1, len(re.findall(r"[aeiouy]+", word.removesuffix("e") or word)))
         else:
@@ -235,7 +253,10 @@ def load_whisper(name):
     try:
         model.transcribe(np.zeros(16000, dtype=np.float32))  # warm-up
     except Exception:
-        del model  # free its GPU memory before a caller tries a smaller one
+        # Free its GPU memory before a caller tries a smaller one. `del` isn't enough: the
+        # traceback being raised keeps the model alive.
+        with contextlib.suppress(Exception):
+            model.unload() if hasattr(model, "unload") else model.model.unload_model()
         raise
     return model
 
@@ -244,10 +265,11 @@ def load_model():
     """Whisper on an NVIDIA GPU (default), on another GPU with ASR_DEVICE=vulkan, or on the CPU
     with ASR_DEVICE=cpu (int8, smaller model). A first use downloads the model; a model that
     won't load falls back to the engine's default instead of failing at every start, and one
-    that doesn't fit in GPU memory to a smaller one. Returns (model, the model it replaced)."""
+    that doesn't fit in GPU memory to a smaller one. Returns (model, its name, the model it
+    replaced); the model and its name are None when none fits in GPU memory yet."""
     name, default = asr_model(), default_asr_model()
     for attempt in dict.fromkeys([name, default]):
-        downloading = None
+        downloading, short_of_memory = None, False
         try:
             if not model_downloaded(attempt):
                 downloading = desktop.notify(f"⏳ Downloading the speech model {attempt}…", persistent=True,
@@ -259,24 +281,28 @@ def load_model():
         except Exception as e:
             desktop.close_notification(downloading)
             if DEVICE != "cpu" and out_of_memory(e):
-                tried = [short_name(attempt)]
-                if found := load_smaller(attempt, tried):
-                    desktop.notify(f"⚠ GPU memory is short: using {found[1]}",
-                           body=f"Back to {tried[0]} once there's room")
-                    return found[0], tried[0]
-                # Exiting would restart the daemon every few seconds; wait for a take instead.
-                print(f"no GPU memory for any speech model ({e}); retrying on the next take", flush=True)
-                no_memory_notice(tried)
-                return None, tried[0]
-            if attempt != default:
+                print(f"no GPU memory for {attempt} ({e})", flush=True)
+                short_of_memory = True
+            elif attempt != default:
                 print(f"couldn't load {attempt} ({e}); using {default}", flush=True)
                 desktop.notify(f"Couldn't load the speech model {attempt}; using {default}. See the log.")
                 continue
-            if DEVICE != "cpu":
+            elif DEVICE != "cpu":
                 desktop.notify("Dictation can't use the GPU; see the log, or set ASR_DEVICE=cpu")
                 sys.exit(f"{DEVICE} unavailable ({e}); set ASR_DEVICE=cpu to run on the CPU")
-            raise
+            else:
+                raise
+        if short_of_memory:  # out of the except block, whose traceback keeps the failed model alive
+            tried = [short_name(attempt)]
+            if found := load_smaller(attempt, tried):
+                desktop.notify(f"⚠ GPU memory is short: using {found[1]}",
+                       body=f"Back to {tried[0]} once there's room")
+                return found[0], found[1], tried[0]
+            # Exiting would restart the daemon every few seconds; wait for a take instead.
+            print("no GPU memory for any speech model; retrying on the next take", flush=True)
+            no_memory_notice(tried)
+            return None, None, tried[0]
         if downloading:
             desktop.close_notification(downloading)
             desktop.notify(f"✅ Speech model {attempt} is ready")
-        return model, None
+        return model, short_name(attempt), None

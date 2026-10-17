@@ -27,7 +27,7 @@ class Dictation:
         from evdev import UInput, ecodes
         from evdev.uinput import UInputError
 
-        model, fallback_from = engine.load_model()  # warmed up; None if no GPU memory yet
+        model, name, fallback_from = engine.load_model()  # warmed up; None if no GPU memory yet
         # Register every paste key so the menu can switch between them without a restart.
         all_keys = sorted({getattr(ecodes, k) for keys in store.PASTE_KEYS.values() for k in keys}
                           | {ecodes.KEY_BACKSPACE})  # erases a dictation when it's corrected
@@ -37,7 +37,7 @@ class Dictation:
             kbd = None
             print(f"virtual keyboard unavailable ({e}); transcripts go to the clipboard", flush=True)
             desktop.notify("No virtual keyboard: transcripts are copied, paste them with Ctrl+V")
-        d = cls(model, sd, kbd, ecodes, fallback_from)
+        d = cls(model, sd, kbd, ecodes, fallback_from, name)
         d.refresh_hint()
         d.REPEAT_WINDOW = repeat_window()
         threading.Thread(target=d._watch_release, daemon=True).start()
@@ -45,14 +45,16 @@ class Dictation:
         print("ready", flush=True)
         return d
 
-    def __init__(self, model, sd, kbd, ec, fallback_from=None):
-        """Dictation's state around a loaded speech model (or None), the sounddevice module, the
-        virtual keyboard (None: copy instead of typing) and evdev's ecodes. create() passes the
-        real ones and starts the watcher threads; tests pass fakes."""
+    def __init__(self, model, sd, kbd, ec, fallback_from=None, model_name=None):
+        """Dictation's state around a loaded speech model (or None) and its name, the sounddevice
+        module, the virtual keyboard (None: copy instead of typing) and evdev's ecodes. create()
+        passes the real ones and starts the watcher threads; tests pass fakes."""
         import numpy as np
 
         self.np, self.sd, self.ec = np, sd, ec
         self.model, self.fallback_from = model, fallback_from
+        # The model in use, which may be a smaller one than chosen: out of memory, step down from it.
+        self.model_name = model_name or engine.short_name(engine.asr_model())
         self.kbd = kbd
         self.last_memory_notice = 0.0
         self.lock = threading.Lock()
@@ -68,6 +70,7 @@ class Dictation:
         self.last_used = time.monotonic()
         self.model_lock = threading.Lock()  # held while the speech model is used, loaded or freed
         self.last_take = None  # (audio, text) of the latest transcription
+        self.take_id = 0  # counts takes, so a cancelled save can tell whether a newer one came
         self.last_save = 0.0
         self.held = False
 
@@ -137,21 +140,22 @@ class Dictation:
                 if not engine.out_of_memory(e):
                     raise
                 print(f"no GPU memory to reload the speech model ({e})", flush=True)
-                return self.use_smaller_model(self.fallback_from or engine.short_name(engine.asr_model()))
+                return self.use_smaller_model(self.fallback_from or self.model_name, self.model_name)
             print(f"speech model reloaded in {time.time() - t0:.2f}s", flush=True)
             return True
 
-    def use_smaller_model(self, preferred):
-        """Swap in the largest smaller model that fits in free GPU memory."""
-        tried = [preferred]
-        found = engine.load_smaller(preferred, tried)
+    def use_smaller_model(self, preferred, current=None):
+        """Swap in the largest model smaller than current (default: preferred, the chosen one)
+        that fits in free GPU memory."""
+        tried = [current or preferred]
+        found = engine.load_smaller(tried[0], tried)
         if not found:
             if time.monotonic() - self.last_memory_notice > 10:  # once per take, not per thread
                 self.last_memory_notice = time.monotonic()
                 engine.no_memory_notice(tried)
             return False
         self.model, name = found
-        self.fallback_from = preferred
+        self.model_name, self.fallback_from = name, preferred
         desktop.notify(f"⚠ GPU memory is short: using {name}", body=f"Back to {preferred} once there's room")
         return True
 
@@ -166,6 +170,7 @@ class Dictation:
             if not engine.out_of_memory(e):
                 raise
             return
+        self.model_name = engine.short_name(engine.asr_model())
         desktop.notify(f"✅ Back to {self.fallback_from}", body="The GPU has room for it again")
         self.fallback_from = None
 
@@ -277,6 +282,7 @@ class Dictation:
             return
         with self.model_lock:
             t0 = time.time()
+            short_of_memory = False
             try:
                 text, lang = self.transcribe(audio)
             except RuntimeError as e:
@@ -284,9 +290,20 @@ class Dictation:
                     raise
                 # The model is loaded, but another program took the GPU memory it needs to run.
                 print(f"no GPU memory to transcribe ({e})", flush=True)
+                short_of_memory = True
+            if short_of_memory:  # out of the except block, whose traceback holds the model's memory
                 engine.speech_unload(self.model)
-                fits = self.use_smaller_model(self.fallback_from or engine.short_name(engine.asr_model()))
-                text, lang = self.transcribe(audio) if fits else ("", None)
+                if not self.use_smaller_model(self.fallback_from or self.model_name, self.model_name):
+                    return  # it said so; "Didn't catch that" on top would mislead
+                try:
+                    text, lang = self.transcribe(audio)
+                except RuntimeError as e:
+                    if not engine.out_of_memory(e):
+                        raise
+                    print(f"no GPU memory to transcribe with {self.model_name} either ({e})", flush=True)
+                    desktop.notify("Not enough GPU memory to dictate",
+                                   body="Close other GPU programs, or set ASR_DEVICE=cpu.")
+                    return
         self.last_used = time.monotonic()
         print(f"[{len(audio) / store.RATE:.1f}s audio (-{excess / store.RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
               flush=True)
@@ -297,7 +314,10 @@ class Dictation:
         if not text:
             return
         # Saved takes keep Whisper's text, matching the audio; [2] becomes its history entry.
-        take = self.last_take = [audio, text, None]
+        take = [audio, text, None]
+        with self.lock:
+            self.take_id += 1
+            self.last_take = take
         if rewrite:
             t0 = time.time()
             # Say so only when the rewrite is slow (the model is still loading, usually).
@@ -335,7 +355,8 @@ class Dictation:
 
     def save(self):
         """Offer to save the last take for fine-tuning, after the user checks its transcript."""
-        take, self.last_take = self.last_take, None  # each take is saved at most once
+        with self.lock:  # each take is saved at most once
+            take, self.last_take, take_id = self.last_take, None, self.take_id
         if take is None:
             if time.monotonic() - self.last_save < Dictation.REPEAT_WINDOW:
                 return  # auto-repeat of the key that just saved
@@ -343,19 +364,35 @@ class Dictation:
             return
         self.last_save = time.monotonic()
         # Ask first, off the socket loop: dictation keys keep working while the dialog is open.
-        threading.Thread(target=self.confirm_save, args=(take,), daemon=True).start()
+        threading.Thread(target=self.confirm_save, args=(take, take_id), daemon=True).start()
 
-    def confirm_save(self, take):
+    def confirm_save(self, take, take_id):
         """Show the transcript for checking (a saved one must match the audio exactly), then
-        save. Cancelled: nothing is saved, and the take can still be saved with the key."""
+        save. Cancelled or failed: nothing is saved, and the take can still be saved with the key."""
         audio, text, entry = take
-        confirmed = desktop.edit_text(text, "Save this recording for fine-tuning? Fix any wrong words first",
-                                      "Save")
-        if confirmed is None or not confirmed.strip():
-            if self.last_take is None:  # no newer take since: F4 can offer this one again
-                self.last_take = take
+        try:
+            confirmed = desktop.edit_text(text, "Save this recording for fine-tuning? Fix any wrong words first",
+                                          "Save")
+        except Exception:  # noqa: BLE001 - e.g. no dialog tool: say so rather than seem to ignore the key
+            traceback.print_exc()
+            desktop.notify("Couldn't open the save dialog", body="See the log: journalctl --user -u tuxwhisper")
+            self.restore_take(take, take_id)
             return
-        self.write_recording(audio, confirmed.strip(), entry)
+        if confirmed is None or not confirmed.strip():
+            self.restore_take(take, take_id)
+            return
+        try:
+            self.write_recording(audio, confirmed.strip(), entry)
+        except Exception as e:  # noqa: BLE001 - e.g. a full disk: keep the take for another try
+            traceback.print_exc()
+            desktop.notify("Couldn't save the recording", body=str(e))
+            self.restore_take(take, take_id)
+
+    def restore_take(self, take, take_id):
+        """Let the save key offer take again, unless a newer take came while its dialog was open."""
+        with self.lock:
+            if self.last_take is None and self.take_id == take_id:
+                self.last_take = take
 
     def write_recording(self, audio, text, entry):
         """Write the take as recordings/<timestamp>.wav + a row in metadata.csv (Hugging Face
@@ -548,6 +585,11 @@ def typed_length(text):
 def send(cmd):
     """Send a key's command to the daemon; it answers by closing the connection."""
     if request(cmd, timeout=5) is None:
+        state = subprocess.run(["systemctl", "--user", "is-active", store.APP],
+                               capture_output=True, text=True).stdout.strip()
+        if state in ("active", "activating"):  # loading its model: the socket isn't up yet
+            desktop.notify("TuxWhisper is still starting", body="Try again in a few seconds.")
+            sys.exit(1)
         # Not running, e.g. systemd gave up after repeated start failures: start it again
         # rather than leave the key doing nothing.
         subprocess.run(["systemctl", "--user", "reset-failed", store.APP], capture_output=True)

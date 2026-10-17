@@ -164,7 +164,10 @@ def llm_cleanup(text, lang):
                          {"role": "user", "content": json.dumps({"transcript": text}, ensure_ascii=False)}],
         }, timeout=30 + len(text) // 100)  # long takes take longer to rewrite
         # A rewrite that ran out of room is missing words: never paste it as if it were whole.
-        if r.get("done_reason") == "length" or r.get("prompt_eval_count", 0) + r.get("eval_count", 0) >= ctx:
+        # done_reason says so; the counts are a backstop for servers that don't (Ollama trims
+        # an input that overflows), used only when both are reported.
+        counts = r.get("prompt_eval_count"), r.get("eval_count")
+        if r.get("done_reason") == "length" or (all(counts) and sum(counts) >= ctx):
             print(f"rewrite cut short at {ctx} tokens", flush=True)
             desktop.notify("Too long for LLM cleanup, pasted raw transcript",
                            body="Split long dictations into shorter takes.")
