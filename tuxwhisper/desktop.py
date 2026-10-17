@@ -12,26 +12,34 @@ import threading
 
 from tuxwhisper import store
 
+# How long a notice stays up, in ms: a bare title is read at a glance, a body takes longer,
+# and a warning or error should stay long enough to read even when looking away.
+NOTIFY_TIMEOUTS = {"info": 1500, "info+body": 6000, "warn": 8000, "error": 8000}
+NOTIFY_ICONS = {"warn": "dialog-warning", "error": "dialog-error"}
 
-def notify(msg, persistent=False, body=None):
-    """Show a desktop notification. persistent=True keeps it on screen until
-    close_notification() is called with the returned ID."""
+
+def notify(msg, persistent=False, body=None, level="info", icon=None, replace=None):
+    """Show a desktop notification; level is "info", "warn" or "error". persistent=True keeps
+    it on screen until close_notification() is called with the returned ID; replace=<ID>
+    swaps the text of that one in place, so a status changes without a new popup."""
     extra = [body] if body else []
+    icon = icon or NOTIFY_ICONS.get(level)
+    opts = ["-a", store.APP, "-h", "boolean:transient:true", *(["-i", icon] if icon else [])]
     if not shutil.which("notify-send"):  # notifications are optional
         print(msg, flush=True)
         return None
     if persistent:
         try:
-            r = subprocess.run(["notify-send", "-a", store.APP, "-u", "critical", "-p",
-                                "-h", "boolean:transient:true", msg, *extra],
+            r = subprocess.run(["notify-send", *opts, "-u", "normal", "-t", "0", "-p",
+                                *(["-r", replace] if replace else []), msg, *extra],
                                capture_output=True, text=True, timeout=2)
             nid = r.stdout.strip() or None
             track_notification(nid, open_=True)
             return nid
         except subprocess.TimeoutExpired:
             return None
-    subprocess.Popen(["notify-send", "-a", store.APP, "-t", "6000" if body else "1500",
-                      "-h", "boolean:transient:true", msg, *extra],
+    timeout = NOTIFY_TIMEOUTS["info+body" if level == "info" and body else level]
+    subprocess.Popen(["notify-send", *opts, "-t", str(timeout), msg, *extra],
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return None
 
@@ -273,7 +281,6 @@ def zenity(*args):
     """Show a zenity dialog, or the same dialog in yad when it's installed: yad opens about
     a second sooner than zenity 4. None if cancelled; raises RuntimeError if the dialog
     couldn't be shown, so a missing or broken tool isn't mistaken for the user's Cancel."""
-    args = [f"--title=🐧 {a.removeprefix('--title=')}" if a.startswith("--title=") else a for a in args]
     rows = []
     if "--list" in args:  # rows follow the options; "--" keeps a row like "- item" from reading as one
         first_row = next((i for i, a in enumerate(args) if not a.startswith("-")), len(args))
@@ -316,18 +323,22 @@ def edit_list(path, title, help_text):
             f.write(text + "\n")
 
 
-def edit_text(text, title, ok_label):
-    """Show text in an editable box; the edited text, or None if cancelled. The draft lives in
+def edit_text(text, title, ok_label, explain=None):
+    """Show text in an editable box, with explain above it; the edited text, or None if
+    cancelled. zenity's text-info has no --text, so there explain goes in the title. The draft lives in
     the private runtime dir, since it's dictated text, and never anywhere else; a file of its
     own, since two dialogs can be open at once."""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime:
         raise OSError("XDG_RUNTIME_DIR is not set; run this from a desktop session")
+    if explain and not have_yad():
+        title = f"{title}: {explain}"
     fd, draft = tempfile.mkstemp(prefix=f"{store.APP}-draft-", suffix=".txt", dir=runtime)
     try:
         with os.fdopen(fd, "w") as f:
             f.write(text)
         return zenity("--text-info", "--editable", f"--filename={draft}", f"--title={title}",
+                      *([f"--text={explain}"] if explain and have_yad() else []),
                       "--width=560", "--height=260", f"--ok-label={ok_label}")
     finally:
         with contextlib.suppress(FileNotFoundError):

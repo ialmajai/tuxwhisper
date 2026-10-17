@@ -15,6 +15,7 @@ import pytest
 from tuxwhisper import daemon, desktop, engine, llm, menu, store
 
 real_add_history = store.add_history  # the fixture below stubs it out for the dictation tests
+real_notify = desktop.notify
 
 
 @pytest.fixture(autouse=True)
@@ -657,7 +658,7 @@ def test_correct_last_replaces_in_place_when_the_daemon_can(monkeypatch, tmp_pat
     menu.correct_last()
     assert copied == []  # typed in place, so nothing to paste by hand
     assert jobs == ['{"delete": 15, "text": "send it to John"}']  # 14 characters plus the space
-    assert notified[-1] == "✏️ Replaced the dictated text"
+    assert notified[-1] == "Replaced the dictated text"
 
 
 def test_typed_length_counts_characters_not_accents():
@@ -739,6 +740,19 @@ def test_correct_last_retypes_only_a_fresh_typed_dictation(monkeypatch, typed, a
     assert bool(asked) is expected and bool(copied) is not expected
 
 
+@pytest.mark.parametrize("typed, age, label", [
+    (True, 0, "Replace"), (False, 0, "Copy"), (True, menu.RETYPE_WITHIN + 1, "Copy")])
+def test_correct_last_button_says_what_it_will_do(monkeypatch, typed, age, label):
+    real_add_history("send it to jon", typed=typed)
+    items = store.load_history()
+    items[-1]["at"] -= age
+    store.save_history(items)
+    monkeypatch.setattr(daemon, "request", lambda cmd: "ok")
+    shown, _ = fake_dialogs(monkeypatch, "send it to jon", [])
+    menu.correct_last()
+    assert f"--ok-label={label}" in shown[0]
+
+
 def test_retype_refuses_while_a_take_is_in_flight(monkeypatch):
     monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
     d = make_dictation(monkeypatch)
@@ -805,12 +819,60 @@ def test_stop_before_recording_notice_closes_it(monkeypatch):
     closed = []
     monkeypatch.setattr(desktop, "close_notification", lambda nid: closed.append(nid))
     def slow_notify(msg, **kw):
-        if kw.get("persistent"):
+        if msg == "Recording…":
             d.toggle()  # the take stops while the notice is still being shown
             return "42"
     monkeypatch.setattr(desktop, "notify", slow_notify)
     d.toggle()
     assert "42" in closed and d.indicator is None
+
+
+def test_recording_notice_becomes_transcribing_and_is_closed(monkeypatch):
+    d = make_dictation(monkeypatch)
+    shown, closed = [], []
+    def fake_notify(msg, **kw):
+        shown.append((msg, kw.get("replace")))
+        return "7" if kw.get("persistent") else None
+    monkeypatch.setattr(desktop, "notify", fake_notify)
+    monkeypatch.setattr(desktop, "close_notification", lambda nid: closed.append(nid))
+    d.toggle()
+    d.toggle()
+    assert shown[:2] == [("Recording…", None), ("Transcribing…", "7")]  # replaced in place
+    assert closed == ["7"] and d.pasted
+
+
+def test_transcribing_notice_is_closed_when_a_take_fails(monkeypatch):
+    d = make_dictation(monkeypatch)
+    closed = []
+    monkeypatch.setattr(desktop, "notify", lambda msg, **kw: "7" if kw.get("persistent") else None)
+    monkeypatch.setattr(desktop, "close_notification", lambda nid: closed.append(nid))
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+    d.model.transcribe = boom
+    d.toggle()
+    d.toggle()
+    assert closed == ["7"]
+
+
+@pytest.mark.parametrize("level, body, timeout", [
+    ("info", None, "1500"), ("info", "b", "6000"), ("warn", None, "8000"), ("error", "b", "8000")])
+def test_notify_timeout_follows_its_level(monkeypatch, level, body, timeout):
+    cmds = []
+    monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(desktop.subprocess, "Popen", lambda cmd, **k: cmds.append(cmd))
+    real_notify("Title", body=body, level=level)
+    assert cmds[0][cmds[0].index("-t") + 1] == timeout
+
+
+def test_persistent_notify_stays_and_can_replace(monkeypatch, tmp_path):
+    cmds = []
+    monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or types.SimpleNamespace(
+        stdout="9\n"))
+    assert real_notify("Transcribing…", persistent=True, icon="mic", replace="5") == "9"
+    cmd = cmds[0]
+    assert cmd[cmd.index("-t") + 1] == "0" and cmd[cmd.index("-u") + 1] == "normal"
+    assert cmd[cmd.index("-r") + 1] == "5" and cmd[cmd.index("-i") + 1] == "mic"
 
 
 def test_no_model_switch_while_recording(monkeypatch):
@@ -893,12 +955,12 @@ def test_context_size_grows_with_the_transcript():
     {"done_reason": "length", "prompt_eval_count": 10, "eval_count": 10},
     {"done_reason": "stop", "prompt_eval_count": 1000, "eval_count": 30},  # input was trimmed
 ])
-def test_cleanup_that_ran_out_of_room_pastes_the_raw_transcript(monkeypatch, reply):
+def test_cleanup_that_ran_out_of_room_pastes_the_plain_transcript(monkeypatch, reply):
     monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
     monkeypatch.setattr(llm, "ollama", lambda path, payload, timeout=30: {
         **reply, "message": {"content": '{"cleaned": "half of it"}'}})
     assert llm.llm_cleanup("um the whole take", "en") == "um the whole take"
-    assert notified == ["Too long for LLM cleanup, pasted raw transcript"]
+    assert notified == ["Too long for LLM cleanup; pasted the plain transcript"]
 
 
 def test_cleanup_without_token_counts_is_kept(monkeypatch):

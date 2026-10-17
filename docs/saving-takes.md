@@ -19,10 +19,10 @@ This is the Hugging Face `audiofolder` layout, ready for fine-tuning a speech mo
 > speech. To fix one later, use **Correct last transcript** and tick "Fix the saved
 > recording's transcript", or edit its line in `metadata.csv`.
 
-- The notification shows your progress, e.g. "💾 Saved (142 recordings, 14 min)". About an hour
+- The notification shows your progress, e.g. "Saved (142 recordings, 14 min)". About an hour
   of audio is a good first target for fine-tuning.
 - You can save only the **latest** recording, and only once. Press the save key again and you get "Nothing
   to save" until you dictate again. After **Cancel**, the save key offers the same recording again.
 - Dictation keeps working while the save dialog is open.
-- The save dialog shows Whisper's **raw** output, even for recordings with LLM cleanup, because that's what
+- The save dialog shows Whisper's **plain** output, even for recordings with LLM cleanup, because that's what
   matches the audio. It doesn't see corrections you make in the app you dictated into.

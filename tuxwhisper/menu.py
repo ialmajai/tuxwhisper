@@ -80,8 +80,9 @@ def download_asr_model(name):
     """`tuxwhisper download`: fetch a speech model while the daemon keeps dictating with the
     current one, then switch to it, unless another model was picked in the meantime."""
     size = next((m[2] for m in engine.ASR_MODELS if m[0] == name), "")
-    nid = desktop.notify(f"⏳ Downloading the speech model {name}" + (f" ({size})" if size else "") + "…",
-                 persistent=True, body="<i>Keep dictating; TuxWhisper switches when it's done</i>")
+    nid = desktop.notify(f"Downloading the speech model {name}…", persistent=True,
+                         body="<i>" + (f"About {size}. " if size else "")
+                         + "Keep dictating; TuxWhisper switches when it's done.</i>")
     try:
         if engine.DEVICE == "vulkan":
             from pywhispercpp.utils import download_model
@@ -94,16 +95,17 @@ def download_asr_model(name):
         desktop.close_notification(nid)
         if store.pending_model() == name:
             store.set_pending_model(None)
-        desktop.notify(f"Couldn't download the speech model {name}; still using the current one.")
+        desktop.notify(f"Couldn't download the speech model {name}", body="Still using the current one.",
+                       level="error")
         sys.exit(f"download of {name} failed: {e}")
     desktop.close_notification(nid)
     if store.pending_model() != name:  # the user switched to another model while this downloaded
         return
     store.set_pending_model(None)
     if switch_asr_model(name):
-        desktop.notify(f"✅ Downloaded {name}; switching to it now (about 15 seconds)")
+        desktop.notify(f"Downloaded {name}", body="Switching to it now (about 15 seconds).")
     else:
-        desktop.notify(f"✅ Downloaded {name}; it's used from the next start of TuxWhisper")
+        desktop.notify(f"Downloaded {name}", body="It's used from the next start of TuxWhisper.")
 
 
 def pick_asr_model(current):
@@ -138,12 +140,12 @@ def pick_asr_model(current):
 def menu_choice(rows):
     """Show the settings list (rows: key, setting, value, ...) and return the picked key or None.
     yad shows each row's help as a tooltip; without yad, zenity shows it in a column."""
-    text = "--text=Pick an item. Setting changes apply on the next recording."
+    text = "--text=Pick a row to change it. Most changes apply to your next dictation."
     triples = [rows[i:i + 3] for i in range(0, len(rows), 3)]
     if desktop.have_yad():
         # yad hides only one column, so rows are told apart by their visible names.
         by_name = {name: key for key, name, _ in triples}
-        r = subprocess.run(["yad", *desktop.YAD_APP, "--list", "--title=🐧 TuxWhisper settings",
+        r = subprocess.run(["yad", *desktop.YAD_APP, "--list", "--title=TuxWhisper Settings",
                             *desktop.fit(("Setting", "Value"), [t[1:] for t in triples]),
                             "--center", text, "--column=Setting", "--column=Value", "--column=Help",
                             "--hide-column=3", "--tooltip-column=3", "--print-column=1",
@@ -152,7 +154,7 @@ def menu_choice(rows):
                            capture_output=True, text=True)
         name = r.stdout.strip().split("|")[0]
         return by_name.get(name) if r.returncode == 0 else None
-    choice = desktop.zenity("--list", "--title=TuxWhisper settings",
+    choice = desktop.zenity("--list", "--title=TuxWhisper Settings",
                     *desktop.fit(("Setting", "Value", "What it does"), [(n, v, MENU_HELP[k]) for k, n, v in triples]), text,
                     "--column=key", "--column=Setting", "--column=Value", "--column=What it does",
                     "--hide-column=1", "--print-column=1", "--ok-label=Select", "--cancel-label=Close",
@@ -175,7 +177,7 @@ MENU_HELP = {
     "keys": "The keys for dictation, cleanup, saving and this menu",
     "mode": "What LLM cleanup does: clean up, fix grammar, email, bullet points…",
     "rewrite_model": "The Ollama model used for LLM cleanup",
-    "mode_model": "A different LLM model for this rewrite style only",
+    "mode_model": "A different LLM model for this cleanup style only",
     "asr_model": "The Whisper model: bigger is more accurate, smaller is faster",
     "asr_unload_minutes": "Free GPU memory when you haven't dictated for a while; reloads in under a second",
     "llm_unload_minutes": "Free the cleanup model's GPU memory after a while; reloading takes a few seconds",
@@ -183,7 +185,7 @@ MENU_HELP = {
     "history": "Your last 20 transcripts; pick one to copy it again",
     "vocab": "Names and jargon Whisper should spell right (English)",
     "replacements": 'Spoken words to replace, e.g. "new line" with a line break',
-    "modes": "Your own rewrite styles, as Name => instruction",
+    "modes": "Your own cleanup styles, as Name => instruction",
 }
 
 
@@ -209,9 +211,9 @@ def settings_menu():
                 "language", "Language", store.LANGUAGES.get(s["language"], "auto-detect") + tag["language"],
                 "paste_key", "Paste key", s["paste_key"] + tag["paste_key"],
                 "keys", "Keys", keys_summary(),
-                "mode", "Rewrite style", mode + tag["mode"],
-                "rewrite_model", "LLM model (cleanup)", s["rewrite_model"] + tag["rewrite_model"],
-                "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as LLM model"),
+                "mode", "Cleanup style", mode + tag["mode"],
+                "rewrite_model", "Cleanup model", s["rewrite_model"] + tag["rewrite_model"],
+                "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as cleanup model"),
                 "asr_model", "Speech model", (s["asr_model"] or engine.short_name(engine.default_asr_model()))
                 + tag["asr_model"],
                 "asr_unload_minutes", "Speech model in memory", unload_label(s["asr_unload_minutes"], 0)
@@ -222,7 +224,7 @@ def settings_menu():
                 "history", "Recent transcripts", f"{len(store.load_history())} this session",
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…",
-                "modes", "Custom rewrite styles", "Edit…"]
+                "modes", "Custom cleanup styles", "Edit…"]
         choice = menu_choice(rows)
         if not choice:
             return
@@ -261,12 +263,12 @@ def settings_menu():
             keys_menu()
             continue
         elif choice == "mode":
-            picked = desktop.pick("Rewrite style", list(llm.modes()), mode)
+            picked = desktop.pick("Cleanup style", list(llm.modes()), mode)
             if picked:
                 cfg["mode"] = picked
         elif choice == "modes":
-            desktop.edit_list(store.MODES_FILE, "Custom rewrite styles",
-                      "# One mode per line: Name => instruction for the LLM, e.g.\n"
+            desktop.edit_list(store.MODES_FILE, "Custom cleanup styles",
+                      "# One cleanup style per line: Name => instruction for the LLM, e.g.\n"
                       "# Tweet => Rewrite as a tweet under 280 characters.\n")
             continue
         elif choice in ("rewrite_model", "mode_model"):
@@ -274,20 +276,20 @@ def settings_menu():
             try:
                 models = sorted(m["name"] for m in llm.ollama("/api/tags", timeout=3)["models"])
             except (OSError, ValueError, KeyError):
-                desktop.zenity("--error", "--title=LLM model",
+                desktop.zenity("--error", "--title=Cleanup model",
                        f"--text=Can't reach Ollama at {llm.OLLAMA_URL}. Start it and try again.")
                 continue
             if not models:
-                desktop.zenity("--info", "--title=LLM model",
+                desktop.zenity("--info", "--title=Cleanup model",
                        "--text=No Ollama models installed. Install one with: ollama pull llama3.2")
                 continue
             if choice == "rewrite_model":
                 current = s["rewrite_model"]
-                picked = desktop.pick("LLM model", models, current if ":" in current else current + ":latest")
+                picked = desktop.pick("Cleanup model", models, current if ":" in current else current + ":latest")
                 if picked:
                     cfg["rewrite_model"] = picked
             else:
-                same = "same as LLM model"
+                same = "same as cleanup model"
                 picked = desktop.pick(f"Model for {mode}", [same, *models], s["mode_models"].get(mode, same))
                 if picked:
                     cfg["mode_models"] = {k: v for k, v in s["mode_models"].items() if k != mode}
@@ -306,7 +308,7 @@ def settings_menu():
                             "--hide-column=1", "--print-column=1", "--ok-label=Copy", *rows)
             if picked:
                 desktop.clipboard_set(items[int(picked.split("|")[0])]["text"])
-                desktop.notify("📋 Copied; paste it with Ctrl+V")
+                desktop.notify("Copied", body="Paste it with Ctrl+V.")
             continue
         elif choice == "correct":
             correct_last()
@@ -366,14 +368,20 @@ def correct_last():
         desktop.zenity("--info", "--title=Correct last transcript", "--text=Nothing dictated this session yet.")
         return
     last = items[-1]
-    fixed = desktop.edit_text(last["text"], "Correct last transcript", "Save")
+    # Erase the dictation (it was typed with a trailing space) and type the fix in its place,
+    # but only if it was really typed and recently: after a while the cursor has likely moved.
+    def fresh():
+        return last.get("typed") and time.time() - last.get("at", 0) < RETYPE_WITHIN
+    retype = fresh()
+    fixed = desktop.edit_text(
+        last["text"], "Correct last transcript", "Replace" if retype else "Copy",
+        "Fix the words, then Replace: TuxWhisper retypes it where you dictated it." if retype
+        else "Fix the words, then Copy, and paste the corrected text where you need it.")
     if fixed is None or fixed.strip() == last["text"].strip():
         return
     fixed, before = fixed.strip(), last["text"]
-    # Erase the dictation (it was typed with a trailing space) and type the fix in its place,
-    # but only if it was really typed and recently: after a while the cursor has likely moved.
     replaced = False
-    if last.get("typed") and time.time() - last.get("at", 0) < RETYPE_WITHIN:
+    if retype and fresh():  # checked again: the dialog may have stayed open a long time
         with open(store.retype_path(), "w") as f:
             json.dump({"delete": daemon.typed_length(before) + 1, "text": fixed}, f)
         replaced = daemon.request("retype") == "ok"
@@ -409,5 +417,6 @@ def correct_last():
         else:
             store.fix_recording_text(spoken, written)
         learned.append(kind)
-    desktop.notify("✏️ Replaced the dictated text" if replaced else "📋 Corrected text copied; paste it with Ctrl+V",
-           body=f"Remembered {len(learned)} change{'s' * (len(learned) != 1)}" if learned else None)
+    remembered = f"Remembered {len(learned)} change{'s' * (len(learned) != 1)}." if learned else ""
+    desktop.notify("Replaced the dictated text" if replaced else "Corrected text copied",
+                   body=(remembered if replaced else f"Paste it with Ctrl+V. {remembered}").strip() or None)

@@ -21,13 +21,13 @@ Pasted:   So can you explain how the attention mechanism works?
   minutes idle to free GPU memory, so the next cleanup takes a few seconds longer; change it
   under **LLM in memory** in the settings menu.
 - **Always pastes something:** if Ollama is unreachable, or the model doesn't fit in free
-  GPU memory, it pastes the raw transcript and a notification tells you why.
+  GPU memory, it pastes the plain transcript and a notification tells you why.
 - **Not perfect:** it sometimes drops real words. Use the dictation key when the exact wording matters.
 
 ## Install
 
 LLM cleanup needs about 2 GB of free GPU memory for Llama 3.2, on top of Whisper's 1.5 GB. Without
-that, or in CPU mode, it pastes the raw transcript. You can also point `OLLAMA_URL` at another
+that, or in CPU mode, it pastes the plain transcript. You can also point `OLLAMA_URL` at another
 machine that has the memory (see the end of this page).
 
 Install [Ollama](https://docs.ollama.com/linux) and the cleanup model. The official install
@@ -38,9 +38,9 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.2
 ```
 
-## Rewrite styles
+## Cleanup styles
 
-Pick what the cleanup key does in the settings menu (**Rewrite style**). The recording notification shows the
+Pick what the cleanup key does in the settings menu (**Cleanup style**). The "Recording…" notification shows the
 active style.
 
 | Style | What you get |
@@ -51,19 +51,19 @@ active style.
 | Email | A short, polite email |
 | Bullet points | A concise bullet list |
 
-Add your own under **Custom rewrite styles** in the menu, one `Name => instruction` per line:
+Add your own under **Custom cleanup styles** in the menu, one `Name => instruction` per line:
 
 ```text
 Tweet => Rewrite as a tweet under 280 characters.
 Commit message => Rewrite as a one-line git commit message.
 ```
 
-A custom style with a built-in name replaces it. The rewriting styles change your wording, so
+A custom style with a built-in name replaces it. The styles that rewrite change your wording, so
 check the result before sending it.
 
 Each style can use its own model: pick the style, then the **Model for …** row below it in the menu. For
 example, keep the fast default for Clean up and use a bigger model for Email. Styles without
-their own model use **LLM model (cleanup)**. A bigger model needs more GPU memory and takes longer.
+their own model use **Cleanup model**. A bigger model needs more GPU memory and takes longer.
 
 Ollama can run on another machine; point `OLLAMA_URL` at it (see
 [Configuration](configuration.md)).

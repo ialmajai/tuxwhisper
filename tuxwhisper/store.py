@@ -81,7 +81,7 @@ def read_config():
             print(f"{CONFIG} is unreadable ({e}); using default settings", flush=True)
             # Imported here, not at the top: desktop imports store.
             from tuxwhisper import desktop
-            desktop.notify("Settings file is unreadable; using defaults", body=CONFIG)
+            desktop.notify("Settings file is unreadable; using defaults", body=CONFIG, level="warn")
         return {}
 
 

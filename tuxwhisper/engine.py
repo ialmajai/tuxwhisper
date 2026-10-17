@@ -233,7 +233,7 @@ def load_smaller(name, tried=None):
 
 
 def no_memory_notice(tried):
-    desktop.notify("Not enough GPU memory to dictate",
+    desktop.notify("Not enough GPU memory to dictate", level="error",
            body=f"Tried {', '.join(tried)}. Close other GPU programs, or set ASR_DEVICE=cpu.")
 
 
@@ -272,8 +272,10 @@ def load_model():
         downloading, short_of_memory = None, False
         try:
             if not model_downloaded(attempt):
-                downloading = desktop.notify(f"⏳ Downloading the speech model {attempt}…", persistent=True,
-                                     body="<i>Dictation starts when it's ready</i>")
+                size = next((m[2] for m in ASR_MODELS if m[0] == short_name(attempt)), None)
+                about = f"About {size}. " if size else ""
+                downloading = desktop.notify(f"Downloading the speech model {attempt}…", persistent=True,
+                                     body=f"<i>{about}Dictation starts when it's ready.</i>")
             model = load_whisper(attempt)
         except ImportError as e:
             sys.exit(f"{e.name or 'a speech library'} is missing ({e}); run `tuxwhisper setup` "
@@ -285,18 +287,20 @@ def load_model():
                 short_of_memory = True
             elif attempt != default:
                 print(f"couldn't load {attempt} ({e}); using {default}", flush=True)
-                desktop.notify(f"Couldn't load the speech model {attempt}; using {default}. See the log.")
+                desktop.notify(f"Couldn't load the speech model {attempt}", level="warn",
+                               body=f"Using {default} instead. See the log: journalctl --user -u tuxwhisper")
                 continue
             elif DEVICE != "cpu":
-                desktop.notify("Dictation can't use the GPU; see the log, or set ASR_DEVICE=cpu")
+                desktop.notify("Dictation can't use the GPU", level="error",
+                               body="See the log: journalctl --user -u tuxwhisper, or set ASR_DEVICE=cpu.")
                 sys.exit(f"{DEVICE} unavailable ({e}); set ASR_DEVICE=cpu to run on the CPU")
             else:
                 raise
         if short_of_memory:  # out of the except block, whose traceback keeps the failed model alive
             tried = [short_name(attempt)]
             if found := load_smaller(attempt, tried):
-                desktop.notify(f"⚠ GPU memory is short: using {found[1]}",
-                       body=f"Back to {tried[0]} once there's room")
+                desktop.notify(f"GPU memory is short: using {found[1]}", level="warn",
+                       body=f"Back to {tried[0]} once there's room.")
                 return found[0], found[1], tried[0]
             # Exiting would restart the daemon every few seconds; wait for a take instead.
             print("no GPU memory for any speech model; retrying on the next take", flush=True)
@@ -304,5 +308,5 @@ def load_model():
             return None, None, tried[0]
         if downloading:
             desktop.close_notification(downloading)
-            desktop.notify(f"✅ Speech model {attempt} is ready")
+            desktop.notify(f"Speech model {attempt} is ready")
         return model, short_name(attempt), None

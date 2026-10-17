@@ -67,12 +67,12 @@ LLM cleanup on another machine with `OLLAMA_URL`.
 </details>
 
 <details>
-<summary><b>LLM cleanup pastes the raw transcript</b></summary>
+<summary><b>LLM cleanup pastes the plain transcript</b></summary>
 
 - **"Not enough GPU memory for LLM cleanup":** the cleanup model doesn't fit in free GPU
   memory, which is always the case in CPU mode. Close other GPU programs, pick a smaller model
   in the menu, or point `OLLAMA_URL` at a machine with more memory.
-- **"LLM rewrite failed":** anything else, most often Ollama isn't running or the model isn't
+- **"LLM cleanup failed":** anything else, most often Ollama isn't running or the model isn't
   pulled. Check `ollama list` and `OLLAMA_URL`; the exact error is in the log
   (`journalctl --user -u tuxwhisper -n 20`).
 - **"Too long for LLM cleanup":** the take is too long to rewrite in one go (well over 1,000

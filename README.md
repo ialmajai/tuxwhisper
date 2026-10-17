@@ -27,7 +27,7 @@ local alternative to dictation apps such as Wispr Flow and superwhisper.
   model (Meta's Llama 3.2 by default) that removes "um"s and fixes punctuation, or rewrites
   them as an email, bullet points or your own style. It also applies spoken self-corrections
   ("Tuesday, no wait, Wednesday" becomes "Wednesday"). The model must fit in the GPU memory of
-  the machine running Ollama; otherwise it pastes the raw transcript.
+  the machine running Ollama; otherwise it pastes the plain transcript.
 - **Many languages:** dictate in any of Whisper's 100 languages. LLM cleanup replies in the language
   you spoke; Llama 3.2 is weak outside English, so [pick a stronger model](docs/llm-cleanup.md)
   for other languages.
@@ -54,7 +54,7 @@ Tested on GNOME (Wayland) with an NVIDIA GPU and in CPU mode, and on
 
 On GNOME, setup binds them to F5, F3, F4, F6 and Alt+F9; change any of them under **Keys** in the
 settings menu.
-Wait for the "🎙 Recording…" notification and the start sound before speaking.
+Wait for the start sound or the "Recording…" notification before speaking.
 
 ## Install
 

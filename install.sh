@@ -194,10 +194,10 @@ if [ "$service" = 0 ]; then
     exit 0
 fi
 note "The first start downloads it (about 1.5 GB; the CPU model is smaller). Later starts take about 15 s."
-for _ in $(seq 1 600); do
+for i in $(seq 1 600); do
     log="$(journalctl --user -u tuxwhisper --since "$since" -o cat 2>/dev/null || true)"
     if grep -qx "ready" <<<"$log"; then
-        step "Done. Click into any text box, hold the dictation key, wait for the start sound, speak, and release."
+        step 'Done. Click into any text box, hold the dictation key, wait until you hear the start sound or see “Recording…”, speak, and release.'
         note "Settings: the settings key, or \"TuxWhisper Settings\" in your apps.  LLM cleanup: docs/llm-cleanup.md"
         exit 0
     fi
@@ -206,6 +206,9 @@ for _ in $(seq 1 600); do
         tail -n 5 <<<"$log" >&2
         echo "See docs/troubleshooting.md." >&2
         exit 1
+    fi
+    if (( i % 30 == 0 )); then  # every 60 s, so a long first download doesn't look stuck
+        note "Still downloading the speech model ($(( i / 30 )) min so far)…"
     fi
     sleep 2
 done

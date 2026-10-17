@@ -11,7 +11,7 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
 - Keys: the key for each action. Pick from a list or type any combination, such as
   `Ctrl+Alt+D`; it takes effect at once. On GNOME only; other desktops set keys in their own
   settings ([Other desktops](other-desktops.md)).
-- Rewrite style (Clean up, Email, Bullet points…), the LLM model, and a model per style
+- Cleanup style (Clean up, Email, Bullet points…), the cleanup model, and a model per style
 - Speech model in memory and LLM in memory: how long each stays on the GPU when idle (default
   30 minutes), or always loaded. The speech model reloads in under a second from RAM, starting
   as you press the key, so you rarely notice.
@@ -19,8 +19,8 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
   download sizes. A downloaded model is used at once. A new one downloads in the background
   while you keep dictating with the current model, then TuxWhisper switches to it. If a model
   won't load, TuxWhisper goes back to the default.
-- Vocabulary, replacements and custom rewrite styles
-- Correct last transcript: fix what was pasted; Save erases it and types the fix in its place
+- Vocabulary, replacements and custom cleanup styles
+- Correct last transcript: fix what was pasted; Replace erases it and types the fix in its place
   (within 10 minutes of dictating, with the cursor still after it; otherwise the fix is copied
   for you to paste). Then tick what TuxWhisper should
   remember: a replacement rule (e.g. "tux whisper" → "TuxWhisper"), a vocabulary word, or the
@@ -30,7 +30,7 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
 - Recent transcripts: the last 20 this session; pick one to copy it again. TuxWhisper keeps
   them in `$XDG_RUNTIME_DIR`, which only you can read and which empties when you log out.
 
-Changes apply on the next recording. The menu saves to `~/.config/tuxwhisper/config.toml`, which
+Most changes apply to your next dictation. The menu saves to `~/.config/tuxwhisper/config.toml`, which
 overrides the environment variables below. It needs `zenity`, which GNOME-based distros
 usually include; elsewhere, install the `zenity` package.
 
@@ -64,7 +64,7 @@ settings.
 ## Custom vocabulary
 
 List names and jargon Whisper keeps misspelling in `~/.config/tuxwhisper/vocab.txt`, one per
-line (`#` starts a comment). TuxWhisper re-reads the file on every recording, so you don't need to restart.
+line (`#` starts a comment). TuxWhisper re-reads the file on every dictation, so you don't need to restart.
 
 ```text
 TuxWhisper
@@ -90,7 +90,7 @@ tux whisper => TuxWhisper
 my email => you@example.com
 ```
 
-Like `vocab.txt`, the file is re-read on every recording. Saved recordings keep Whisper's original
+Like `vocab.txt`, the file is re-read on every dictation. Saved recordings keep Whisper's original
 text, which matches the audio. Pick phrases you won't say for real: a `comma => ,` rule also
 fires when you mean the word.
 

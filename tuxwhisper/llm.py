@@ -145,15 +145,15 @@ def llm_cleanup(text, lang):
     try:
         if not rewrite_model_on_gpu():
             print("rewrite skipped: model doesn't fit in GPU memory", flush=True)
-            desktop.notify("Not enough GPU memory for LLM cleanup, pasted raw transcript")
+            desktop.notify("Not enough GPU memory for LLM cleanup; pasted the plain transcript", level="warn")
             return text
         system = REWRITE_SYSTEM.replace("{task}", rewrite_task(text)).replace(
             "{language}", store.LANGUAGES.get(lang, f"the language with code {lang!r}"))
         ctx = context_size(system, text)
         if ctx is None:
             print(f"rewrite skipped: {len(text)} characters is too long", flush=True)
-            desktop.notify("Too long for LLM cleanup, pasted raw transcript",
-                           body="Split long dictations into shorter takes.")
+            desktop.notify("Too long for LLM cleanup; pasted the plain transcript",
+                           body="Split long dictations into shorter takes.", level="warn")
             return text
         r = ollama("/api/chat", {
             "model": mode_model(), "stream": False, "keep_alive": llm_keep_alive(), "think": False,
@@ -169,12 +169,12 @@ def llm_cleanup(text, lang):
         counts = r.get("prompt_eval_count"), r.get("eval_count")
         if r.get("done_reason") == "length" or (all(counts) and sum(counts) >= ctx):
             print(f"rewrite cut short at {ctx} tokens", flush=True)
-            desktop.notify("Too long for LLM cleanup, pasted raw transcript",
-                           body="Split long dictations into shorter takes.")
+            desktop.notify("Too long for LLM cleanup; pasted the plain transcript",
+                           body="Split long dictations into shorter takes.", level="warn")
             return text
         cleaned = json.loads(r["message"]["content"])["cleaned"].strip()
-    except Exception as e:  # noqa: BLE001 - any failure falls back to the raw transcript
+    except Exception as e:  # noqa: BLE001 - any failure falls back to the plain transcript
         print(f"rewrite failed: {e}", flush=True)
-        desktop.notify("LLM rewrite failed, pasted raw transcript")
+        desktop.notify("LLM cleanup failed; pasted the plain transcript", level="warn")
         return text
     return cleaned or text

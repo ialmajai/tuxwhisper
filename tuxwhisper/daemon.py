@@ -36,7 +36,8 @@ class Dictation:
         except (UInputError, OSError) as e:  # no udev rule for /dev/uinput: copy instead of typing
             kbd = None
             print(f"virtual keyboard unavailable ({e}); transcripts go to the clipboard", flush=True)
-            desktop.notify("No virtual keyboard: transcripts are copied, paste them with Ctrl+V")
+            desktop.notify("No virtual keyboard", body="Transcripts are copied instead. Paste them with Ctrl+V.",
+                           level="warn")
         d = cls(model, sd, kbd, ecodes, fallback_from, name)
         d.refresh_hint()
         d.REPEAT_WINDOW = repeat_window()
@@ -156,7 +157,8 @@ class Dictation:
             return False
         self.model, name = found
         self.model_name, self.fallback_from = name, preferred
-        desktop.notify(f"⚠ GPU memory is short: using {name}", body=f"Back to {preferred} once there's room")
+        desktop.notify(f"GPU memory is short: using {name}", body=f"Back to {preferred} once there's room.",
+                       level="warn")
         return True
 
     def try_preferred_model(self):
@@ -171,7 +173,7 @@ class Dictation:
                 raise
             return
         self.model_name = engine.short_name(engine.asr_model())
-        desktop.notify(f"✅ Back to {self.fallback_from}", body="The GPU has room for it again")
+        desktop.notify(f"Back to {self.fallback_from}", body="The GPU has room for it again.")
         self.fallback_from = None
 
     def _start(self, rewrite):
@@ -191,7 +193,8 @@ class Dictation:
             stream.start()
         except Exception as e:  # noqa: BLE001 - unplugged, busy or no mic: stay ready
             print(f"microphone unavailable: {e}", flush=True)
-            desktop.notify("🎙 Microphone unavailable; check that it's connected and not in use")
+            desktop.notify("Microphone unavailable", body="Check that it's connected and not in use.",
+                           level="error")
             return None
         self.stream, self.indicator = stream, None
         return stream
@@ -199,8 +202,8 @@ class Dictation:
     def _announce(self, stream, rewrite):
         """Show "Recording…" outside self.lock: notify-send -p can take a while, and holding the
         lock would delay a quick stop. A stop that came first closes the notification."""
-        nid = desktop.notify(f"🎙 Recording ({llm.current_mode()})…" if rewrite else "🎙 Recording…",
-                     persistent=True, body=self.hint)
+        nid = desktop.notify(f"Recording ({llm.current_mode()})…" if rewrite else "Recording…",
+                             persistent=True, body=self.hint, icon=MIC_ICON)
         with self.lock:
             if self.stream is stream:
                 self.indicator = nid
@@ -208,7 +211,8 @@ class Dictation:
         desktop.close_notification(nid)
 
     def _stop(self, cut_at):
-        """Close the mic (under self.lock); the take as (chunks, excess, rewrite, warming, ticket)."""
+        """Close the mic (under self.lock); the take as (chunks, excess, rewrite, warming, ticket,
+        the recording notification's ID, which becomes "Transcribing…")."""
         # Drop the audio recorded between the key release (cut_at) and now.
         excess = int(max(0.0, time.monotonic() - cut_at) * store.RATE) if cut_at else 0
         try:
@@ -218,12 +222,12 @@ class Dictation:
             print(f"microphone error on stop: {e}", flush=True)
         finally:
             self.stream = None
-        desktop.close_notification(self.indicator)
+        indicator, self.indicator = self.indicator, None
         desktop.sound("device-removed")
         chunks, self.chunks = self.chunks, []
         # This take's own mode: the next take may start before this one is pasted.
         ticket, self.next_ticket = self.next_ticket, self.next_ticket + 1
-        return chunks, excess, self.rewrite, getattr(self, "warming", None), ticket
+        return chunks, excess, self.rewrite, getattr(self, "warming", None), ticket, indicator
 
     def toggle(self, cut_at=None, rewrite=False):
         with self.lock:
@@ -236,15 +240,21 @@ class Dictation:
             if stream is not None:
                 self._announce(stream, rewrite)
             return
-        chunks, excess, rewrite, warming, ticket = take
-        with self.turn:
-            self.turn.wait_for(lambda: self.serving == ticket)
+        chunks, excess, rewrite, warming, ticket, indicator = take
+        # Swap "Recording…" for "Transcribing…" in place: one notification, not a new popup.
+        # Shown outside self.lock, which notify-send -p would hold up.
+        status = [desktop.notify("Transcribing…", persistent=True, icon=MIC_ICON, replace=indicator)]
         try:
-            self.process(chunks, excess, rewrite, warming)
+            with self.turn:
+                self.turn.wait_for(lambda: self.serving == ticket)
+            self.process(chunks, excess, rewrite, warming, status)
         except Exception:  # noqa: BLE001 - a failed take must not pass silently
             traceback.print_exc()
-            desktop.notify("Dictation failed", body="See the log: journalctl --user -u tuxwhisper")
+            end_status(status)
+            desktop.notify("Dictation failed", body="See the log: journalctl --user -u tuxwhisper",
+                           level="error")
         finally:
+            end_status(status)
             with self.turn:
                 self.serving += 1
                 self.turn.notify_all()
@@ -271,8 +281,9 @@ class Dictation:
             text = retry if ok else ""
         return text, lang
 
-    def process(self, chunks, excess, rewrite, warming):
-        """Transcribe one take, clean it up if asked, and paste it."""
+    def process(self, chunks, excess, rewrite, warming, status=None):
+        """Transcribe one take, clean it up if asked, and paste it. status holds the take's
+        "Transcribing…" notification, closed once there's a result or a notice to show."""
         audio = self.np.concatenate(chunks)[:, 0] if chunks else []
         if excess:
             audio = audio[:-excess]
@@ -302,7 +313,7 @@ class Dictation:
                         raise
                     print(f"no GPU memory to transcribe with {self.model_name} either ({e})", flush=True)
                     desktop.notify("Not enough GPU memory to dictate",
-                                   body="Close other GPU programs, or set ASR_DEVICE=cpu.")
+                                   body="Close other GPU programs, or set ASR_DEVICE=cpu.", level="error")
                     return
         self.last_used = time.monotonic()
         print(f"[{len(audio) / store.RATE:.1f}s audio (-{excess / store.RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
@@ -310,7 +321,8 @@ class Dictation:
         missed = missed_speech(len(audio) / store.RATE, text)
         if missed:
             print(f"  {missed[0]}: {missed[1]}", flush=True)
-            desktop.notify(missed[0], body=missed[1])
+            end_status(status)
+            desktop.notify(missed[0], body=missed[1], level="warn")
         if not text:
             return
         # Saved takes keep Whisper's text, matching the audio; [2] becomes its history entry.
@@ -323,7 +335,7 @@ class Dictation:
             # Say so only when the rewrite is slow (the model is still loading, usually).
             busy = []
             timer = threading.Timer(0.8, lambda: busy.append(
-                desktop.notify(f"✨ Rewriting ({llm.current_mode()})…", persistent=True)))
+                desktop.notify(f"Cleaning up ({llm.current_mode()})…", persistent=True, icon=MIC_ICON)))
             timer.start()
             if warming:
                 warming.join()
@@ -334,6 +346,7 @@ class Dictation:
                 desktop.close_notification(busy[0])
             print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
         text = store.apply_replacements(text)
+        end_status(status)
         typed = self.paste(text + " ")
         take[2] = store.add_history(text, rewritten=rewrite, typed=typed)  # only a typed take can be retyped
         self.warn_if_clipped(audio)
@@ -350,8 +363,8 @@ class Dictation:
         if clipped > CLIP_SHARE and time.monotonic() - self.last_clip_warning > CLIP_WARN_EVERY:
             self.last_clip_warning = time.monotonic()
             print(f"  clipping: {clipped:.2%} of samples", flush=True)
-            desktop.notify("🎙 Your mic is clipping: move back a little or lower its input volume "
-                   "in Settings → Sound")
+            desktop.notify("Your mic is clipping", level="warn",
+                           body="Move back a little, or lower its input volume in Settings → Sound.")
 
     def save(self):
         """Offer to save the last take for fine-tuning, after the user checks its transcript."""
@@ -375,7 +388,8 @@ class Dictation:
                                           "Save")
         except Exception:  # noqa: BLE001 - e.g. no dialog tool: say so rather than seem to ignore the key
             traceback.print_exc()
-            desktop.notify("Couldn't open the save dialog", body="See the log: journalctl --user -u tuxwhisper")
+            desktop.notify("Couldn't open the save dialog", body="See the log: journalctl --user -u tuxwhisper",
+                           level="error")
             self.restore_take(take, take_id)
             return
         if confirmed is None or not confirmed.strip():
@@ -385,7 +399,7 @@ class Dictation:
             self.write_recording(audio, confirmed.strip(), entry)
         except Exception as e:  # noqa: BLE001 - e.g. a full disk: keep the take for another try
             traceback.print_exc()
-            desktop.notify("Couldn't save the recording", body=str(e))
+            desktop.notify("Couldn't save the recording", body=str(e), level="error")
             self.restore_take(take, take_id)
 
     def restore_take(self, take, take_id):
@@ -419,7 +433,7 @@ class Dictation:
         else:
             store.mark_last_saved(name)
         print(f"saved {name} ({takes} recordings, {total})", flush=True)
-        desktop.notify(f"💾 Saved ({takes} recordings, {total})")
+        desktop.notify(f"Saved ({takes} recordings, {total})")
 
     def retype(self):
         """Replace the last dictation with its correction (from retype_path()): erase what was
@@ -449,16 +463,16 @@ class Dictation:
         # the Ctrl shortcuts always paste the clipboard.
         if self.kbd is None:
             if desktop.clipboard_set(text):
-                desktop.notify("📋 Copied; paste it with Ctrl+V")
+                desktop.notify("Copied", body="Paste it with Ctrl+V.")
             else:
-                desktop.notify(COPY_FAILED)
+                desktop.notify(*COPY_FAILED, level="error")
             return False
         paste_key = store.settings()["paste_key"]
         keys = [getattr(self.ec, k) for k in store.PASTE_KEYS[paste_key]]
         selections = ("clipboard", "primary") if paste_key == "shift+insert" else ("clipboard",)
         saved = {sel: desktop.clipboard_get(sel) for sel in selections}
         if not all(desktop.clipboard_set(text, sel) for sel in saved):  # pasting now would paste old text
-            desktop.notify(COPY_FAILED)
+            desktop.notify(*COPY_FAILED, level="error")
             return False
         time.sleep(0.05)
         ec, k = self.ec, self.kbd
@@ -474,7 +488,14 @@ class Dictation:
         return True
 
 
-COPY_FAILED = "Couldn't copy the transcript; find it under Recent transcripts in the settings menu"
+COPY_FAILED = ("Couldn't copy the transcript", "Find it under Recent transcripts in the settings menu.")
+MIC_ICON = "audio-input-microphone"
+
+
+def end_status(status):
+    """Close a take's "Transcribing…" notification, once: status is a one-item list."""
+    if status:
+        desktop.close_notification(status.pop())
 
 
 
@@ -509,7 +530,7 @@ def sock_path():
     # other local users reach the socket, so refuse to run without it.
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime:  # an OSError, so callers such as request() handle it instead of exiting
-        desktop.notify(f"{store.APP}: XDG_RUNTIME_DIR is not set")
+        desktop.notify("XDG_RUNTIME_DIR is not set", level="error")
         raise OSError("XDG_RUNTIME_DIR is not set; run this from a desktop session")
     return os.path.join(runtime, f"{store.APP}.sock")
 
@@ -560,7 +581,8 @@ def serve():
                 d.save()
         except Exception:  # noqa: BLE001 - one failed command must not stop dictation
             traceback.print_exc()
-            desktop.notify("TuxWhisper command failed", body="See the log: journalctl --user -u tuxwhisper")
+            desktop.notify("TuxWhisper command failed", body="See the log: journalctl --user -u tuxwhisper",
+                           level="error")
 
 
 
@@ -588,7 +610,7 @@ def send(cmd):
         state = subprocess.run(["systemctl", "--user", "is-active", store.APP],
                                capture_output=True, text=True).stdout.strip()
         if state in ("active", "activating"):  # loading its model: the socket isn't up yet
-            desktop.notify("TuxWhisper is still starting", body="Try again in a few seconds.")
+            desktop.notify("TuxWhisper is still starting", body="Try again in a few seconds.", level="warn")
             sys.exit(1)
         # Not running, e.g. systemd gave up after repeated start failures: start it again
         # rather than leave the key doing nothing.
@@ -597,5 +619,6 @@ def send(cmd):
                                  capture_output=True).returncode == 0
         desktop.notify("Starting TuxWhisper…" if started else f"{store.APP} isn't running",
                        body="Try again in about 15 seconds." if started
-                       else "Start it with: systemctl --user start tuxwhisper")
+                       else "Start it with: systemctl --user start tuxwhisper",
+                       level="info" if started else "error")
         sys.exit(1)
