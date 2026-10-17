@@ -5,6 +5,9 @@ wherever your cursor is: a browser text box, an LLM chat prompt, your editor or 
 terminal. Everything runs on your own machine with free, open models. Your voice never
 reaches a cloud service, and there's nothing to pay for.
 
+Voice typing and speech-to-text for Ubuntu, Fedora, Arch and other Linux desktops: a free,
+local alternative to dictation apps such as Wispr Flow and superwhisper.
+
 [![CI](https://github.com/ialmajai/tuxwhisper/actions/workflows/ci.yml/badge.svg)](https://github.com/ialmajai/tuxwhisper/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Platform: Linux](https://img.shields.io/badge/platform-Linux-blue?logo=linux&logoColor=white)
