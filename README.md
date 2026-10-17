@@ -22,13 +22,15 @@ reaches a cloud service, and there's nothing to pay for.
 - **Types anywhere:** browsers, editors, terminals, on X11 and Wayland (including GNOME).
 - **LLM cleanup (optional):** the cleanup key runs your words through a local [Ollama](https://ollama.com)
   model (Meta's Llama 3.2 by default) that removes "um"s and fixes punctuation, or rewrites
-  them as an email, bullet points or your own style. The model must fit in the GPU memory of
+  them as an email, bullet points or your own style. It also applies spoken self-corrections
+  ("Tuesday, no wait, Wednesday" becomes "Wednesday"). The model must fit in the GPU memory of
   the machine running Ollama; otherwise it pastes the raw transcript.
 - **Many languages:** dictate in any of Whisper's 100 languages. LLM cleanup replies in the language
   you spoke; Llama 3.2 is weak outside English, so [pick a stronger model](docs/llm-cleanup.md)
   for other languages.
 
-**Also:** tap or hold to talk, a custom vocabulary for names and jargon, replacements such as
+**Also:** tap or hold to talk, whispered words, a smaller speech model when the GPU is busy,
+a notice when nothing was heard, a custom vocabulary for names and jargon, replacements such as
 "new line" → line break, corrections that teach it your words for next time, a settings menu
 with your last 20 transcripts, and
 [saved recordings](docs/saving-takes.md) for fine-tuning Whisper to your voice and accent.
