@@ -1,4 +1,4 @@
-# 🐧 TuxWhisper
+# <img src="tuxwhisper.svg" alt="" width="44" align="top"> TuxWhisper
 
 **Private, offline dictation for Linux.** Press a key, speak, and your words are typed
 wherever your cursor is: a browser text box, an LLM chat prompt, your editor or your
