@@ -122,5 +122,4 @@ downloaded models, listing where they are.
 
 ## License
 
-[MIT](LICENSE) © 2026 Ibrahim Almajai. The penguin icon is from
-[Noto Emoji](https://github.com/googlefonts/noto-emoji) (Apache License 2.0).
+[MIT](LICENSE) © 2026 Ibrahim Almajai.

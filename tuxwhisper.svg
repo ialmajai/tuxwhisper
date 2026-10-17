@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- TuxWhisper icon: an original penguin with sound waves. -->
+  <!-- body -->
+  <ellipse cx="112" cy="140" rx="74" ry="92" fill="#23262e" stroke="#5a6170" stroke-width="4"/>
+  <!-- belly -->
+  <ellipse cx="112" cy="158" rx="50" ry="68" fill="#f4f1ea"/>
+  <!-- face patch -->
+  <path d="M74 98 C74 70 150 70 150 98 C150 122 132 132 112 132 C92 132 74 122 74 98 Z" fill="#f4f1ea"/>
+  <!-- eyes -->
+  <ellipse cx="96" cy="96" rx="8" ry="10" fill="#23262e"/>
+  <ellipse cx="128" cy="96" rx="8" ry="10" fill="#23262e"/>
+  <circle cx="99" cy="92" r="3" fill="#ffffff"/>
+  <circle cx="131" cy="92" r="3" fill="#ffffff"/>
+  <!-- beak -->
+  <path d="M100 112 Q112 106 124 112 Q118 124 112 125 Q106 124 100 112 Z" fill="#f5b942"/>
+  <!-- flippers -->
+  <path d="M42 132 Q24 170 46 200 Q56 178 58 142 Z" fill="#23262e" stroke="#5a6170" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M182 132 Q200 170 178 200 Q168 178 166 142 Z" fill="#23262e" stroke="#5a6170" stroke-width="4" stroke-linejoin="round"/>
+  <!-- feet -->
+  <ellipse cx="88" cy="232" rx="22" ry="9" fill="#f5b942"/>
+  <ellipse cx="136" cy="232" rx="22" ry="9" fill="#f5b942"/>
+  <!-- sound waves (the whisper) -->
+  <g fill="none" stroke="#3b82f6" stroke-linecap="round" stroke-width="9">
+    <path d="M202 92 Q216 112 202 132"/>
+    <path d="M222 74 Q246 112 222 150"/>
+  </g>
+</svg>
