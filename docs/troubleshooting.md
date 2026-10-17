@@ -37,7 +37,7 @@ the [manual install](manual-install.md#2-allow-the-virtual-keyboard), including 
 <details>
 <summary><b>It doesn't paste in one app</b></summary>
 
-That app may not treat Shift+Insert as paste. Set **Paste key** to `ctrl+v` in the settings
+That app may not treat Shift+Insert as paste. Set **Paste key** to Ctrl+V in the settings
 menu.
 </details>
 

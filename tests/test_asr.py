@@ -232,7 +232,7 @@ def save_with_answer(monkeypatch, d, answer):
     """Press the save key; the confirmation dialog returns answer (None = Cancel)."""
     shown = []
     monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
-    monkeypatch.setattr(desktop, "edit_text", lambda text, title, ok: shown.append(text) or answer)
+    monkeypatch.setattr(desktop, "edit_text", lambda text, title, ok, explain=None: shown.append(text) or answer)
     d.save()
     return shown
 
@@ -279,11 +279,19 @@ def test_save_that_fails_to_write_is_reported_and_the_take_kept(monkeypatch):
     assert notified == ["Couldn't save the recording"] and d.last_take is take
 
 
+@pytest.mark.parametrize("err, body", [
+    (OSError(28, "No space left on device"), "The disk is full."),
+    (PermissionError(13, "Permission denied"), "No permission to write to {}."),
+    (ValueError("odd"), "odd")])
+def test_save_errors_are_said_plainly(err, body):
+    assert daemon.write_error(err) == body.format(store.RECORDINGS)
+
+
 def test_cancelled_save_does_not_bring_back_an_older_take(monkeypatch):
     d = make_dictation(monkeypatch)
     d.last_take = [np.zeros(store.RATE, dtype=np.float32), "old", None]
     monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
-    def dialog(text, title, ok):
+    def dialog(text, title, ok, explain=None):
         # While it's open, a newer take is dictated and the save key takes it for its own dialog.
         d.take_id += 1
         d.last_take = None
@@ -873,6 +881,45 @@ def test_persistent_notify_stays_and_can_replace(monkeypatch, tmp_path):
     cmd = cmds[0]
     assert cmd[cmd.index("-t") + 1] == "0" and cmd[cmd.index("-u") + 1] == "normal"
     assert cmd[cmd.index("-r") + 1] == "5" and cmd[cmd.index("-i") + 1] == "mic"
+
+
+def test_slow_cleanup_replaces_transcribing_in_place(monkeypatch):
+    d = make_dictation(monkeypatch)
+    shown, closed = [], []
+    def fake_notify(msg, **kw):
+        shown.append((msg, kw.get("replace")))
+        return "7" if kw.get("persistent") else None
+    monkeypatch.setattr(desktop, "notify", fake_notify)
+    monkeypatch.setattr(desktop, "close_notification", lambda nid: closed.append(nid))
+    monkeypatch.setattr(daemon.threading, "Timer", lambda delay, fn: types.SimpleNamespace(
+        start=fn, cancel=lambda: None, join=lambda: None))  # the cleanup is slow: fires at once
+    d.toggle(rewrite=True)
+    d.toggle()
+    assert [m for m in shown if m[0].startswith("Cleaning up")] == [(f"Cleaning up ({llm.current_mode()})…", "7")]
+    assert closed == ["7"]
+
+
+def test_plural():
+    assert desktop.plural(1, "word", "words") == "1 word"
+    assert desktop.plural(0, "word", "words") == "0 words"
+    assert desktop.plural(3, "recording", "recordings") == "3 recordings"
+
+
+def test_paste_key_labels_map_to_stored_values(monkeypatch):
+    assert set(menu.PASTE_LABELS) == set(store.PASTE_KEYS)
+    picks = iter(["Ctrl+Shift+V"])
+    seen = []
+    def fake_pick(title, options, current):
+        seen.append((options, current))
+        return next(picks)
+    choices = iter(["paste_key", None])
+    monkeypatch.setattr(menu, "menu_choice", lambda rows: next(choices))
+    monkeypatch.setattr(menu, "keys_summary", lambda: "")
+    monkeypatch.setattr(menu.shutil, "which", lambda name: "/usr/bin/zenity")
+    monkeypatch.setattr(desktop, "pick", fake_pick)
+    menu.settings_menu()
+    assert seen == [(["Shift+Insert", "Ctrl+V", "Ctrl+Shift+V"], "Shift+Insert")]
+    assert store.read_config()["paste_key"] == "ctrl+shift+v"
 
 
 def test_no_model_switch_while_recording(monkeypatch):

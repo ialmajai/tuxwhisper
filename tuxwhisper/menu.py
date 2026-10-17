@@ -138,17 +138,18 @@ def pick_asr_model(current):
 
 
 def menu_choice(rows):
-    """Show the settings list (rows: key, setting, value, ...) and return the picked key or None.
-    yad shows each row's help as a tooltip; without yad, zenity shows it in a column."""
+    """Show the settings list (rows: key, setting, value, ...) and return the picked key or None,
+    with each row's help in a column of its own."""
     text = "--text=Pick a row to change it. Most changes apply to your next dictation."
     triples = [rows[i:i + 3] for i in range(0, len(rows), 3)]
     if desktop.have_yad():
-        # yad hides only one column, so rows are told apart by their visible names.
+        # No hidden key column here, so rows are told apart by their visible names.
         by_name = {name: key for key, name, _ in triples}
         r = subprocess.run(["yad", *desktop.YAD_APP, "--list", "--title=TuxWhisper Settings",
-                            *desktop.fit(("Setting", "Value"), [t[1:] for t in triples]),
-                            "--center", text, "--column=Setting", "--column=Value", "--column=Help",
-                            "--hide-column=3", "--tooltip-column=3", "--print-column=1",
+                            *desktop.fit(("Setting", "Value", "What it does"),
+                                         [(n, v, MENU_HELP[k]) for k, n, v in triples]),
+                            "--center", text, "--column=Setting", "--column=Value", "--column=What it does",
+                            "--print-column=1",
                             "--button=Close:1", "--button=Select:0", "--",
                             *[x for key, name, value in triples for x in (name, value, MENU_HELP[key])]],
                            capture_output=True, text=True)
@@ -173,7 +174,7 @@ MENU_HELP = {
     "sounds": "Beep when recording starts and stops",
     "sound_volume": "How loud the beeps are",
     "language": "The language you speak; fixed avoids misdetection on short clips",
-    "paste_key": "Key combination used to paste; try ctrl+v if an app doesn't paste",
+    "paste_key": "Key used to paste; try Ctrl+V if an app doesn't paste",
     "keys": "The keys for dictation, cleanup, saving and this menu",
     "mode": "What LLM cleanup does: clean up, fix grammar, email, bullet points…",
     "rewrite_model": "The Ollama model used for LLM cleanup",
@@ -187,6 +188,10 @@ MENU_HELP = {
     "replacements": 'Spoken words to replace, e.g. "new line" with a line break',
     "modes": "Your own cleanup styles, as Name => instruction",
 }
+
+
+# The paste keys as people write them; the settings file keeps store.PASTE_KEYS' names.
+PASTE_LABELS = {"shift+insert": "Shift+Insert", "ctrl+v": "Ctrl+V", "ctrl+shift+v": "Ctrl+Shift+V"}
 
 
 def keys_summary():
@@ -206,25 +211,26 @@ def settings_menu():
         # The menu can't see the service's environment, so unchanged settings say so.
         tag = {k: "" if k in cfg else " (default)" for k in s}
         mode = llm.current_mode()
-        rows = ["sounds", "Sounds", ("On" if s["sounds"] else "Off") + tag["sounds"],
-                "sound_volume", "Sound volume", f"{s['sound_volume']}%" + tag["sound_volume"],
+        # In groups: past transcripts, speech, LLM cleanup, then keys and sounds.
+        rows = ["correct", "Correct last transcript", "Fix…",
+                "history", "Recent transcripts", f"{len(store.load_history())} this session",
                 "language", "Language", store.LANGUAGES.get(s["language"], "auto-detect") + tag["language"],
-                "paste_key", "Paste key", s["paste_key"] + tag["paste_key"],
-                "keys", "Keys", keys_summary(),
-                "mode", "Cleanup style", mode + tag["mode"],
-                "rewrite_model", "Cleanup model", s["rewrite_model"] + tag["rewrite_model"],
-                "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as cleanup model"),
                 "asr_model", "Speech model", (s["asr_model"] or engine.short_name(engine.default_asr_model()))
                 + tag["asr_model"],
                 "asr_unload_minutes", "Speech model in memory", unload_label(s["asr_unload_minutes"], 0)
                 + tag["asr_unload_minutes"],
-                "llm_unload_minutes", "LLM in memory", unload_label(s["llm_unload_minutes"], -1)
-                + tag["llm_unload_minutes"],
-                "correct", "Correct last transcript", "Fix…",
-                "history", "Recent transcripts", f"{len(store.load_history())} this session",
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…",
-                "modes", "Custom cleanup styles", "Edit…"]
+                "mode", "Cleanup style", mode + tag["mode"],
+                "rewrite_model", "Cleanup model", s["rewrite_model"] + tag["rewrite_model"],
+                "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as cleanup model"),
+                "llm_unload_minutes", "LLM in memory", unload_label(s["llm_unload_minutes"], -1)
+                + tag["llm_unload_minutes"],
+                "modes", "Custom cleanup styles", "Edit…",
+                "keys", "Keys", keys_summary(),
+                "paste_key", "Paste key", PASTE_LABELS[s["paste_key"]] + tag["paste_key"],
+                "sounds", "Sounds", ("On" if s["sounds"] else "Off") + tag["sounds"],
+                "sound_volume", "Sound volume", f"{s['sound_volume']}%" + tag["sound_volume"]]
         choice = menu_choice(rows)
         if not choice:
             return
@@ -245,9 +251,10 @@ def settings_menu():
             if picked:
                 cfg["language"] = names[picked]
         elif choice == "paste_key":
-            picked = desktop.pick("Paste key", list(store.PASTE_KEYS), s["paste_key"])
+            labels = {PASTE_LABELS[k]: k for k in store.PASTE_KEYS}
+            picked = desktop.pick("Paste key", list(labels), PASTE_LABELS[s["paste_key"]])
             if picked:
-                cfg["paste_key"] = picked
+                cfg["paste_key"] = labels[picked]
         elif choice in ("asr_unload_minutes", "llm_unload_minutes"):
             never = 0 if choice == "asr_unload_minutes" else -1
             options = [-1, 5, 10, 30, 60] if never == 0 else [0, 5, 10, 30, 60, -1]
@@ -417,6 +424,6 @@ def correct_last():
         else:
             store.fix_recording_text(spoken, written)
         learned.append(kind)
-    remembered = f"Remembered {len(learned)} change{'s' * (len(learned) != 1)}." if learned else ""
+    remembered = f"Remembered {desktop.plural(len(learned), 'change', 'changes')}." if learned else ""
     desktop.notify("Replaced the dictated text" if replaced else "Corrected text copied",
                    body=(remembered if replaced else f"Paste it with Ctrl+V. {remembered}").strip() or None)

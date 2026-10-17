@@ -44,6 +44,11 @@ def notify(msg, persistent=False, body=None, level="info", icon=None, replace=No
     return None
 
 
+def plural(n, one, many):
+    """"1 recording", "3 recordings"."""
+    return f"{n} {one if n == 1 else many}"
+
+
 def settings_shortcut():
     """The GNOME shortcut bound to the settings command, e.g. "Alt+F9", or None."""
     ours = our_shortcut(gnome_shortcuts() or {}, "settings")

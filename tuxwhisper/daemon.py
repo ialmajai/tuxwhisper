@@ -1,6 +1,7 @@
 """The dictation daemon and the socket the key commands reach it through."""
 import csv
 import datetime
+import errno
 import fcntl
 import json
 import os
@@ -251,8 +252,8 @@ class Dictation:
         except Exception:  # noqa: BLE001 - a failed take must not pass silently
             traceback.print_exc()
             end_status(status)
-            desktop.notify("Dictation failed", body="See the log: journalctl --user -u tuxwhisper",
-                           level="error")
+            desktop.notify("Dictation failed", level="error",
+                           body="Try again. If it keeps failing, see: journalctl --user -u tuxwhisper")
         finally:
             end_status(status)
             with self.turn:
@@ -332,18 +333,20 @@ class Dictation:
             self.last_take = take
         if rewrite:
             t0 = time.time()
-            # Say so only when the rewrite is slow (the model is still loading, usually).
-            busy = []
-            timer = threading.Timer(0.8, lambda: busy.append(
-                desktop.notify(f"Cleaning up ({llm.current_mode()})…", persistent=True, icon=MIC_ICON)))
+            # Say so only when the cleanup is slow (the model is still loading, usually), in place
+            # of "Transcribing…": the same notification, so nothing flashes up and away.
+            status = status if status is not None else []
+            def cleaning():
+                nid = desktop.notify(f"Cleaning up ({llm.current_mode()})…", persistent=True,
+                                     icon=MIC_ICON, replace=status[0] if status else None)
+                status[:] = [nid]
+            timer = threading.Timer(0.8, cleaning)
             timer.start()
             if warming:
                 warming.join()
             text = llm.llm_cleanup(text, lang)
             timer.cancel()
             timer.join()
-            if busy:
-                desktop.close_notification(busy[0])
             print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
         text = store.apply_replacements(text)
         end_status(status)
@@ -384,8 +387,9 @@ class Dictation:
         save. Cancelled or failed: nothing is saved, and the take can still be saved with the key."""
         audio, text, entry = take
         try:
-            confirmed = desktop.edit_text(text, "Save this recording for fine-tuning? Fix any wrong words first",
-                                          "Save")
+            confirmed = desktop.edit_text(text, "Save for fine-tuning", "Save",
+                                          "Check the transcript matches what you said, then Save. "
+                                          "Cancel keeps it; you can save it later.")
         except Exception:  # noqa: BLE001 - e.g. no dialog tool: say so rather than seem to ignore the key
             traceback.print_exc()
             desktop.notify("Couldn't open the save dialog", body="See the log: journalctl --user -u tuxwhisper",
@@ -399,7 +403,7 @@ class Dictation:
             self.write_recording(audio, confirmed.strip(), entry)
         except Exception as e:  # noqa: BLE001 - e.g. a full disk: keep the take for another try
             traceback.print_exc()
-            desktop.notify("Couldn't save the recording", body=str(e), level="error")
+            desktop.notify("Couldn't save the recording", body=write_error(e), level="error")
             self.restore_take(take, take_id)
 
     def restore_take(self, take, take_id):
@@ -432,8 +436,9 @@ class Dictation:
             store.update_history_entry(entry, recording=name)
         else:
             store.mark_last_saved(name)
-        print(f"saved {name} ({takes} recordings, {total})", flush=True)
-        desktop.notify(f"Saved ({takes} recordings, {total})")
+        saved = f"{desktop.plural(takes, 'recording', 'recordings')}, {total}"
+        print(f"saved {name} ({saved})", flush=True)
+        desktop.notify(f"Saved ({saved})")
 
     def retype(self):
         """Replace the last dictation with its correction (from retype_path()): erase what was
@@ -499,6 +504,15 @@ def end_status(status):
 
 
 
+def write_error(e):
+    """A failed save in plain words: the common causes said plainly, anything else as is."""
+    if isinstance(e, OSError) and e.errno == errno.ENOSPC:
+        return "The disk is full."
+    if isinstance(e, OSError) and e.errno in (errno.EACCES, errno.EPERM):
+        return f"No permission to write to {store.RECORDINGS}."
+    return str(e)
+
+
 def missed_speech(seconds, text):
     """(title, body) when Whisper heard far less than was recorded, else None. Its silence
     filter drops speech it can't make out (too quiet, whispered, a muted mic), and without a
@@ -508,7 +522,8 @@ def missed_speech(seconds, text):
     if not words and seconds >= 1:
         return "Didn't catch that", f"No speech found in {seconds:.0f} s of audio. {hint}"
     if seconds >= 10 and words < seconds / 3:  # normal speech is 2–3 words a second
-        return "Only caught a few words", f"{words} words from {seconds:.0f} s of audio; some may be missing. {hint}"
+        return ("Only caught a few words",
+                f"{desktop.plural(words, 'word', 'words')} from {seconds:.0f} s of audio; some may be missing. {hint}")
     return None
 
 
@@ -530,7 +545,7 @@ def sock_path():
     # other local users reach the socket, so refuse to run without it.
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime:  # an OSError, so callers such as request() handle it instead of exiting
-        desktop.notify("XDG_RUNTIME_DIR is not set", level="error")
+        desktop.notify("TuxWhisper needs a desktop session", body="XDG_RUNTIME_DIR is not set.", level="error")
         raise OSError("XDG_RUNTIME_DIR is not set; run this from a desktop session")
     return os.path.join(runtime, f"{store.APP}.sock")
 
