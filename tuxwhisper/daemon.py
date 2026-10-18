@@ -22,7 +22,6 @@ from tuxwhisper.client import request, send, sock_path  # noqa: F401 - re-export
 
 # Clipping: samples at full scale, as when speaking too close to the mic or with the gain too high.
 CLIP_LEVEL, CLIP_SHARE, CLIP_WARN_EVERY = 0.99, 0.001, 600  # level, share of samples, seconds
-RETRY_MAX_SECONDS = 30  # whispered takes longer than this aren't retried without the voice filter
 HINT_EVERY = 300  # seconds between lookups of the settings key shown under "Recording…"
 
 
@@ -44,7 +43,7 @@ class Dictation:
         from evdev import UInput, ecodes
         from evdev.uinput import UInputError
 
-        model, name, fallback_from = engine.load_model()  # warmed up; None if no GPU memory yet
+        models = engine.ModelManager.load()  # warmed up; no model yet if no GPU memory
         # Register every paste key so the menu can switch between them without a restart.
         all_keys = sorted({getattr(ecodes, k) for keys in store.PASTE_KEYS.values() for k in keys}
                           | {ecodes.KEY_BACKSPACE})  # erases a dictation when it's corrected
@@ -55,7 +54,7 @@ class Dictation:
             print(f"virtual keyboard unavailable ({e}); transcripts go to the clipboard", flush=True)
             desktop.notify("No virtual keyboard", body="Transcripts are copied instead. Paste them with Ctrl+V.",
                            level="warn")
-        d = cls(model, sd, kbd, ecodes, fallback_from, name)
+        d = cls(models, sd, kbd, ecodes)
         d.refresh_hint()
         d.REPEAT_WINDOW = repeat_window()
         threading.Thread(target=d._watch_release, daemon=True).start()
@@ -63,18 +62,15 @@ class Dictation:
         print("ready", flush=True)
         return d
 
-    def __init__(self, model, sd, kbd, ec, fallback_from=None, model_name=None):
-        """Dictation's state around a loaded speech model (or None) and its name, the sounddevice
+    def __init__(self, models, sd, kbd, ec):
+        """Dictation's state around the speech model (an engine.ModelManager), the sounddevice
         module, the virtual keyboard (None: copy instead of typing) and evdev's ecodes. create()
         passes the real ones and starts the watcher threads; tests pass fakes."""
         import numpy as np
 
         self.np, self.sd, self.ec = np, sd, ec
-        self.model, self.fallback_from = model, fallback_from
-        # The model in use, which may be a smaller one than chosen: out of memory, step down from it.
-        self.model_name = model_name or engine.short_name(engine.asr_model())
+        self.models = models
         self.kbd = kbd
-        self.last_memory_notice = 0.0
         self.lock = threading.Lock()
         self.press_lock = threading.Lock()  # presses come from one thread per connection
         # Takes are transcribed and pasted one at a time, in the order they stopped.
@@ -88,8 +84,6 @@ class Dictation:
         self.chunks = []
         self.last_press = 0.0
         self.last_used = time.monotonic()
-        self.model_lock = threading.Lock()  # held while the speech model is used, loaded or freed
-        self.last_lang = "en"  # the last take's language: the guess for the next one's prompt
         self.last_take: Take | None = None  # the latest transcription, until the save key takes it
         self.takes = 0  # counts takes, so a cancelled save can tell whether a newer one came
         self.last_save = 0.0
@@ -133,78 +127,17 @@ class Dictation:
 
     def restore_preferred_model(self):
         """Go back to the chosen model when there's room, between takes rather than during one."""
-        if self.fallback_from and self.stream is None and self.model_lock.acquire(blocking=False):
-            try:
-                self.try_preferred_model()
-            finally:
-                self.model_lock.release()
+        if self.stream is None:
+            self.models.restore_if_room()
 
     def unload_if_idle(self):
-        minutes = store.settings().asr_unload_minutes
-        if (minutes and engine.DEVICE != "cpu" and self.stream is None
-                and time.monotonic() - self.last_used > minutes * 60
-                and self.model_lock.acquire(blocking=False)):  # not while one is transcribing
-            try:
-                if self.model is not None and self.model.loaded():
-                    self.model.unload()
-                    print(f"speech model unloaded after {minutes} min idle", flush=True)
-            finally:
-                self.model_lock.release()
-
-    def ensure_model(self):
-        """Load the speech model back onto the GPU if it was freed (under a second from RAM).
-        Without enough GPU memory, use the largest smaller model that fits; False if none does."""
-        with self.model_lock:
-            if self.model is None:
-                return self.use_smaller_model(self.fallback_from)
-            if self.model.loaded():
-                return True
-            t0 = time.time()
-            try:
-                self.model.load()
-            except RuntimeError as e:
-                if not engine.out_of_memory(e):
-                    raise
-                print(f"no GPU memory to reload the speech model ({e})", flush=True)
-                return self.use_smaller_model(self.fallback_from or self.model_name, self.model_name)
-            print(f"speech model reloaded in {time.time() - t0:.2f}s", flush=True)
-            return True
-
-    def use_smaller_model(self, preferred, current=None):
-        """Swap in the largest model smaller than current (default: preferred, the chosen one)
-        that fits in free GPU memory."""
-        tried = [current or preferred]
-        found = engine.load_smaller(tried[0], tried)
-        if not found:
-            if time.monotonic() - self.last_memory_notice > 10:  # once per take, not per thread
-                self.last_memory_notice = time.monotonic()
-                engine.no_memory_notice(tried)
-            return False
-        self.model, name = found
-        self.model_name, self.fallback_from = name, preferred
-        desktop.notify(f"GPU memory is short: using {name}", body=f"Back to {preferred} once there's room.",
-                       level="warn")
-        return True
-
-    def try_preferred_model(self):
-        """Go back to the chosen model once the GPU has room for it again."""
-        free = engine.free_gpu_gb()
-        if free is None or free < engine.model_size(self.fallback_from) + engine.GPU_MARGIN_GB:
-            return
-        try:
-            self.model = engine.load_whisper(engine.asr_model())
-        except RuntimeError as e:
-            if not engine.out_of_memory(e):
-                raise
-            return
-        self.model_name = engine.short_name(engine.asr_model())
-        desktop.notify(f"Back to {self.fallback_from}", body="The GPU has room for it again.")
-        self.fallback_from = None
+        if self.stream is None:
+            self.models.unload_if_idle(store.settings().asr_unload_minutes, time.monotonic() - self.last_used)
 
     def _start(self, rewrite):
         """Open the mic for a new take (under self.lock); the stream, or None if the mic failed."""
         self.last_used = time.monotonic()
-        threading.Thread(target=self.ensure_model, daemon=True).start()  # overlaps the speech
+        threading.Thread(target=self.models.ensure_loaded, daemon=True).start()  # overlaps the speech
         self.chunks = []
         self.rewrite = rewrite  # mode is set by the key that started the take
         # A cold load takes seconds, so overlap it with the speech; the cleanup skips its own
@@ -287,42 +220,6 @@ class Dictation:
                 self.serving += 1
                 self.turn.notify_all()
 
-    def transcribe(self, audio):
-        """The take's (text, language) (under self.model_lock), with whispered takes retried
-        without the voice filter."""
-        lang = store.settings().language or None  # "" is automatic
-        # The English prompt and vocabulary make Whisper translate other languages into English.
-        # With no language set, guess the prompt from the last take's language and let Whisper
-        # detect it in the same pass: one transcription instead of a detection and then one.
-        english = (lang or self.last_lang) == "en"
-        segments, info = self._transcribe(audio, lang, english, vad_filter=True)
-        if not lang:
-            lang = getattr(info, "language", None)
-            if lang is None:  # a model that doesn't report it: detect, as a separate pass
-                lang = self.model.detect_language(audio)[0]
-            if (lang == "en") != english:  # guessed the wrong prompt: redo with the right one
-                english = lang == "en"
-                segments, _ = self._transcribe(audio, lang, english, vad_filter=True)
-            self.last_lang = lang
-        text = " ".join(s.text.strip() for s in segments).strip()
-        if (not text and engine.sound_seconds(audio, store.RATE) >= engine.MIN_SOUND
-                and len(audio) <= RETRY_MAX_SECONDS * store.RATE):
-            # The filter heard no voice in a take with sound: likely whispered. Try without
-            # it, keeping the result only if it fits the sound (Whisper may invent a phrase).
-            # Not for long takes: a whispered one is short, and a long retry would cost seconds.
-            segments, _ = self._transcribe(audio, lang, english, vad_filter=False)
-            retry = " ".join(s.text.strip() for s in segments).strip()
-            ok = engine.plausible(retry, audio, store.RATE)
-            print(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})", flush=True)
-            text = retry if ok else ""
-        return text, lang
-
-    def _transcribe(self, audio, lang, english, vad_filter):
-        """(segments, info) from the model; lang None detects the language."""
-        return self.model.transcribe(audio, language=lang, vad_filter=vad_filter,
-                                     prompt=engine.PROMPT if english else None,
-                                     hotwords=store.vocab() if english else None)
-
     def process(self, chunks, excess, rewrite, warming, status=None):
         """Transcribe one take, clean it up if asked, and paste it. status holds the take's
         "Transcribing…" notification, closed once there's a result or a notice to show."""
@@ -333,32 +230,13 @@ class Dictation:
             return
         # Read the clipboard to restore after the paste while the take transcribes.
         snapshot = self.snapshot_clipboard() if self.kbd is not None else None
-        if not self.ensure_model():
+        if not self.models.ensure_loaded():
             return
-        with self.model_lock:
-            t0 = time.time()
-            short_of_memory = False
-            try:
-                text, lang = self.transcribe(audio)
-            except RuntimeError as e:
-                if not engine.out_of_memory(e):
-                    raise
-                # The model is loaded, but another program took the GPU memory it needs to run.
-                print(f"no GPU memory to transcribe ({e})", flush=True)
-                short_of_memory = True
-            if short_of_memory:  # out of the except block, whose traceback holds the model's memory
-                self.model.unload()
-                if not self.use_smaller_model(self.fallback_from or self.model_name, self.model_name):
-                    return  # it said so; "Didn't catch that" on top would mislead
-                try:
-                    text, lang = self.transcribe(audio)
-                except RuntimeError as e:
-                    if not engine.out_of_memory(e):
-                        raise
-                    print(f"no GPU memory to transcribe with {self.model_name} either ({e})", flush=True)
-                    desktop.notify("Not enough GPU memory to dictate",
-                                   body="Close other GPU programs, or set ASR_DEVICE=cpu.", level="error")
-                    return
+        t0 = time.time()
+        result = self.models.transcribe(audio, store.settings())
+        if result is None:
+            return
+        text, lang = result
         self.last_used = time.monotonic()
         print(f"[{len(audio) / store.RATE:.1f}s audio (-{excess / store.RATE:.2f}s tail), {time.time() - t0:.2f}s asr] {text!r}",
               flush=True)

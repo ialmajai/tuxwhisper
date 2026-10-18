@@ -5,6 +5,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 import types
 import urllib.request
 from collections.abc import Iterable
@@ -270,9 +272,16 @@ def load_smaller(name: str, tried: list[str] | None = None) -> tuple[SpeechModel
     return None
 
 
-def no_memory_notice(tried: list[str]) -> None:
+def no_memory_notice(tried: list[str] | None = None) -> None:
+    """No speech model fits in GPU memory; tried names the ones that didn't."""
+    advice = "Close other GPU programs, or set ASR_DEVICE=cpu."
     desktop.notify("Not enough GPU memory to dictate", level="error",
-           body=f"Tried {', '.join(tried)}. Close other GPU programs, or set ASR_DEVICE=cpu.")
+                   body=f"Tried {', '.join(tried)}. {advice}" if tried else advice)
+
+
+def fallback_notice(name: str, preferred: str) -> None:
+    desktop.notify(f"GPU memory is short: using {name}", body=f"Back to {preferred} once there's room.",
+                   level="warn")
 
 
 def load_whisper(name: str) -> SpeechModel:
@@ -331,8 +340,7 @@ def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
         if short_of_memory:  # out of the except block, whose traceback keeps the failed model alive
             tried = [short_name(attempt)]
             if found := load_smaller(attempt, tried):
-                desktop.notify(f"GPU memory is short: using {found[1]}", level="warn",
-                       body=f"Back to {tried[0]} once there's room.")
+                fallback_notice(found[1], tried[0])
                 return found[0], found[1], tried[0]
             # Exiting would restart the daemon every few seconds; wait for a take instead.
             print("no GPU memory for any speech model; retrying on the next take", flush=True)
@@ -342,3 +350,153 @@ def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
             desktop.close_notification(downloading)
             desktop.notify(f"Speech model {attempt} is ready")
         return model, short_name(attempt), None
+
+
+RETRY_MAX_SECONDS = 30  # whispered takes longer than this aren't retried without the voice filter
+
+
+class ModelManager:
+    """The speech model in use and what keeps it usable: loading it back after an idle unload,
+    stepping down to a smaller model when the GPU runs out of memory (loading or running), and
+    going back to the chosen one once there's room."""
+
+    def __init__(self, model: SpeechModel | None, name: str | None = None, fallback_from: str | None = None):
+        """model: loaded and warmed up, or None if none fit in GPU memory yet; name: its name;
+        fallback_from: the chosen model it stands in for, if it's a smaller one."""
+        self.model, self.fallback_from = model, fallback_from
+        # The model in use, which may be a smaller one than chosen: out of memory, step down from it.
+        self.name = name or short_name(asr_model())
+        self.lock = threading.Lock()  # held while the speech model is used, loaded or freed
+        self.last_memory_notice = 0.0
+        self.last_lang = "en"  # the last take's language: the guess for the next one's prompt
+
+    @classmethod
+    def load(cls) -> "ModelManager":
+        return cls(*load_model())
+
+    def ensure_loaded(self) -> bool:
+        """Load the speech model back onto the GPU if it was freed (under a second from RAM).
+        Without enough GPU memory, use the largest smaller model that fits; False if none does."""
+        with self.lock:
+            if self.model is None:
+                return self._step_down(self.fallback_from)
+            if self.model.loaded():
+                return True
+            t0 = time.time()
+            try:
+                self.model.load()
+            except RuntimeError as e:
+                if not out_of_memory(e):
+                    raise
+                print(f"no GPU memory to reload the speech model ({e})", flush=True)
+                return self._step_down(self.fallback_from or self.name, self.name)
+            print(f"speech model reloaded in {time.time() - t0:.2f}s", flush=True)
+            return True
+
+    def _step_down(self, preferred: str, current: str | None = None) -> bool:
+        """Swap in the largest model smaller than current (default: preferred, the chosen one)
+        that fits in free GPU memory."""
+        tried = [current or preferred]
+        found = load_smaller(tried[0], tried)
+        if not found:
+            if time.monotonic() - self.last_memory_notice > 10:  # once per take, not per thread
+                self.last_memory_notice = time.monotonic()
+                no_memory_notice(tried)
+            return False
+        self.model, self.name = found
+        self.fallback_from = preferred
+        fallback_notice(self.name, preferred)
+        return True
+
+    def restore_if_room(self) -> None:
+        """Go back to the chosen model once the GPU has room for it again; not while the model
+        is in use."""
+        if self.fallback_from and self.lock.acquire(blocking=False):
+            try:
+                free = free_gpu_gb()
+                if free is None or free < model_size(self.fallback_from) + GPU_MARGIN_GB:
+                    return
+                try:
+                    self.model = load_whisper(asr_model())
+                except RuntimeError as e:
+                    if not out_of_memory(e):
+                        raise
+                    return
+                self.name = short_name(asr_model())
+                desktop.notify(f"Back to {self.fallback_from}", body="The GPU has room for it again.")
+                self.fallback_from = None
+            finally:
+                self.lock.release()
+
+    def unload_if_idle(self, minutes: int, idle: float) -> None:
+        """Free the model's GPU memory when it's been idle (seconds) over minutes; 0 = never."""
+        if (minutes and DEVICE != "cpu" and idle > minutes * 60
+                and self.lock.acquire(blocking=False)):  # not while one is transcribing
+            try:
+                if self.model is not None and self.model.loaded():
+                    self.model.unload()
+                    print(f"speech model unloaded after {minutes} min idle", flush=True)
+            finally:
+                self.lock.release()
+
+    def transcribe(self, audio: Any, settings: "store.Settings") -> tuple[str, str] | None:
+        """The take's (text, language); None if the GPU has no memory for any model (the user
+        has been told). Out of memory while running, it steps down to a smaller model once."""
+        with self.lock:
+            short_of_memory = False
+            try:
+                return self._transcribe(audio, settings)
+            except RuntimeError as e:
+                if not out_of_memory(e):
+                    raise
+                # The model is loaded, but another program took the GPU memory it needs to run.
+                print(f"no GPU memory to transcribe ({e})", flush=True)
+                short_of_memory = True
+            if short_of_memory:  # out of the except block, whose traceback holds the model's memory
+                self.model.unload()
+                if not self._step_down(self.fallback_from or self.name, self.name):
+                    return None  # it said so; "Didn't catch that" on top would mislead
+                try:
+                    return self._transcribe(audio, settings)
+                except RuntimeError as e:
+                    if not out_of_memory(e):
+                        raise
+                    print(f"no GPU memory to transcribe with {self.name} either ({e})", flush=True)
+                    no_memory_notice()
+                    return None
+
+    def _transcribe(self, audio, settings):
+        """(text, language) (under self.lock), with whispered takes retried without the voice
+        filter."""
+        lang = settings.language or None  # "" is automatic
+        # The English prompt and vocabulary make Whisper translate other languages into English.
+        # With no language set, guess the prompt from the last take's language and let Whisper
+        # detect it in the same pass: one transcription instead of a detection and then one.
+        english = (lang or self.last_lang) == "en"
+        segments, info = self._run(audio, lang, english, vad_filter=True)
+        if not lang:
+            lang = getattr(info, "language", None)
+            if lang is None:  # a model that doesn't report it: detect, as a separate pass
+                lang = self.model.detect_language(audio)[0]
+            if (lang == "en") != english:  # guessed the wrong prompt: redo with the right one
+                english = lang == "en"
+                segments, _ = self._run(audio, lang, english, vad_filter=True)
+            self.last_lang = lang
+        text = " ".join(s.text.strip() for s in segments).strip()
+        if (not text and sound_seconds(audio, store.RATE) >= MIN_SOUND
+                and len(audio) <= RETRY_MAX_SECONDS * store.RATE):
+            # The filter heard no voice in a take with sound: likely whispered. Try without
+            # it, keeping the result only if it fits the sound (Whisper may invent a phrase).
+            # Not for long takes: a whispered one is short, and a long retry would cost seconds.
+            segments, _ = self._run(audio, lang, english, vad_filter=False)
+            retry = " ".join(s.text.strip() for s in segments).strip()
+            ok = plausible(retry, audio, store.RATE)
+            print(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})", flush=True)
+            text = retry if ok else ""
+        return text, lang
+
+    def _run(self, audio, lang, english, vad_filter):
+        """(segments, info) from the model; lang None detects the language."""
+        return self.model.transcribe(audio, language=lang, vad_filter=vad_filter,
+                                     prompt=PROMPT if english else None,
+                                     hotwords=store.vocab() if english else None)

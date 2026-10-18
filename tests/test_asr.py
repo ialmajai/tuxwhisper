@@ -179,7 +179,7 @@ class FakeModel:
 
 
 def make_dictation(monkeypatch):
-    d = daemon.Dictation(FakeModel(), types.SimpleNamespace(InputStream=FakeStream), kbd=None, ec=None)
+    d = daemon.Dictation(engine.ModelManager(FakeModel()), types.SimpleNamespace(InputStream=FakeStream), kbd=None, ec=None)
     d.pasted = []
     d.paste = lambda text, snapshot=None: d.pasted.append(text.strip()) or True
     d.refresh_hint = lambda: None
@@ -192,16 +192,16 @@ def make_dictation(monkeypatch):
 def test_overlapping_takes_keep_their_own_mode(monkeypatch):
     """A cleanup take still transcribing must not switch to raw when a plain take starts."""
     d = make_dictation(monkeypatch)
-    d.model.release_first.clear()
+    d.models.model.release_first.clear()
     d.toggle(rewrite=True)                     # take 1: cleanup
     first = threading.Thread(target=d.toggle)  # stop take 1; it transcribes slowly
     first.start()
-    assert d.model.first_started.wait(5)
+    assert d.models.model.first_started.wait(5)
     d.toggle(rewrite=False)                    # take 2: plain, starts while take 1 transcribes
     second = threading.Thread(target=d.toggle)
     second.start()
     time.sleep(0.2)
-    d.model.release_first.set()
+    d.models.model.release_first.set()
     first.join(5)
     second.join(5)
     assert d.pasted == ["CLEANED:take1", "take2"]  # right mode for each, in order
@@ -382,13 +382,13 @@ def test_speech_model_unloads_when_idle_and_reloads_on_use(monkeypatch):
         f.write("asr_unload_minutes = 5\n")
     d = make_dictation(monkeypatch)
     d.unload_if_idle()
-    assert d.model.loaded()                   # used just now: stays loaded
+    assert d.models.model.loaded()                   # used just now: stays loaded
     d.last_used -= 6 * 60
     d.unload_if_idle()
-    assert not d.model.loaded()               # 6 min idle: freed
+    assert not d.models.model.loaded()               # 6 min idle: freed
     d.toggle()                                # the next take reloads it before transcribing
     d.toggle()
-    assert d.model.loaded() and d.pasted == ["take1"]
+    assert d.models.model.loaded() and d.pasted == ["take1"]
 
 
 def test_speech_model_kept_when_never_or_cpu(monkeypatch):
@@ -398,12 +398,12 @@ def test_speech_model_kept_when_never_or_cpu(monkeypatch):
     with open(store.CONFIG, "w") as f:
         f.write("asr_unload_minutes = 0\n")    # never
     d.unload_if_idle()
-    assert d.model.loaded()
+    assert d.models.model.loaded()
     monkeypatch.setattr(engine, "DEVICE", "cpu")
     with open(store.CONFIG, "w") as f:
         f.write("asr_unload_minutes = 5\n")    # no GPU memory to free on the CPU
     d.unload_if_idle()
-    assert d.model.loaded()
+    assert d.models.model.loaded()
 
 
 def test_no_unload_while_transcribing(monkeypatch):
@@ -412,9 +412,9 @@ def test_no_unload_while_transcribing(monkeypatch):
         f.write("asr_unload_minutes = 5\n")
     d = make_dictation(monkeypatch)
     d.last_used -= 6 * 60
-    with d.model_lock:                        # a take is being transcribed
+    with d.models.lock:                        # a take is being transcribed
         d.unload_if_idle()
-    assert d.model.loaded()
+    assert d.models.model.loaded()
 
 
 # --- GPU memory fallback ---------------------------------------------------------------------
@@ -466,20 +466,20 @@ def test_load_smaller_uses_english_only_models_only_for_english(monkeypatch):
 
 def test_reload_out_of_memory_falls_back_and_still_pastes(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model = OOMModel()
+    d.models.model = OOMModel()
     loads = []
     fake_gpu(monkeypatch, [1.2], loads)
     d.toggle()
     d.toggle()
     assert loads == ["small"]
     assert d.pasted == ["take1"]
-    assert d.fallback_from == "large-v3-turbo"
+    assert d.models.fallback_from == "large-v3-turbo"
     assert any("using small" in n for n in notified)
 
 
 def test_no_model_fits_notifies_once_and_skips_the_take(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model = OOMModel()
+    d.models.model = OOMModel()
     fake_gpu(monkeypatch, [0.05], [])
     d.toggle()
     d.toggle()
@@ -489,7 +489,7 @@ def test_no_model_fits_notifies_once_and_skips_the_take(monkeypatch):
 
 def test_switches_back_when_memory_frees(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model = OOMModel()
+    d.models.model = OOMModel()
     free, loads = [1.2], []
     fake_gpu(monkeypatch, free, loads)
     d.toggle()
@@ -497,7 +497,7 @@ def test_switches_back_when_memory_frees(monkeypatch):
     free[0] = 4.0
     d.restore_preferred_model()  # the idle thread does this between takes
     assert loads == ["small", engine.asr_model()]
-    assert d.fallback_from is None
+    assert d.models.fallback_from is None
     assert any("Back to large-v3-turbo" in n for n in notified)
 
 
@@ -516,7 +516,7 @@ def test_startup_with_no_room_waits_instead_of_exiting(monkeypatch):
 
 def test_take_loads_a_model_once_there_is_room(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model, d.fallback_from = None, "large-v3-turbo"
+    d.models.model, d.models.fallback_from = None, "large-v3-turbo"
     free, loads = [0.05], []
     fake_gpu(monkeypatch, free, loads)
     d.toggle()
@@ -700,7 +700,7 @@ def test_failed_take_is_reported_and_the_next_one_works(monkeypatch):
         if len(calls) == 1:
             raise RuntimeError("boom")
         return [types.SimpleNamespace(text="fine")], None
-    d.model.transcribe = transcribe
+    d.models.model.transcribe = transcribe
     d.toggle()
     d.toggle()
     assert "Dictation failed" in notified and d.pasted == []
@@ -856,7 +856,7 @@ def test_transcribing_notice_is_closed_when_a_take_fails(monkeypatch):
     monkeypatch.setattr(desktop, "close_notification", lambda nid: closed.append(nid))
     def boom(*a, **k):
         raise RuntimeError("boom")
-    d.model.transcribe = boom
+    d.models.model.transcribe = boom
     d.toggle()
     d.toggle()
     assert closed == ["7"]
@@ -924,7 +924,7 @@ def test_paste_key_labels_map_to_stored_values(monkeypatch):
 
 def test_no_model_switch_while_recording(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.fallback_from = "large-v3-turbo"
+    d.models.fallback_from = "large-v3-turbo"
     loads = []
     fake_gpu(monkeypatch, [4.0], loads)
     d.stream = object()
@@ -985,7 +985,7 @@ def test_missed_speech(seconds, text, title):
 
 def test_empty_take_is_reported(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model.transcribe = lambda audio, **_: ([], None)
+    d.models.model.transcribe = lambda audio, **_: ([], None)
     d.toggle()
     d.toggle()
     assert "Didn't catch that" in notified and d.pasted == []
@@ -1084,7 +1084,7 @@ class WhisperedModel(FakeModel):
 ])
 def test_whispered_take_is_retried_without_the_voice_filter(monkeypatch, heard, sound, typed):
     d = make_dictation(monkeypatch)
-    d.model = WhisperedModel(heard)
+    d.models.model = WhisperedModel(heard)
     d.process([burst(sound)[:, None]], 0, False, None)
     assert d.pasted == typed
     assert ("Didn't catch that" in notified) is (not typed)
@@ -1092,7 +1092,7 @@ def test_whispered_take_is_retried_without_the_voice_filter(monkeypatch, heard, 
 
 def test_silence_is_not_retried(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model = WhisperedModel("You")
+    d.models.model = WhisperedModel("You")
     d.process([np.zeros((4 * 16000, 1), dtype=np.float32)], 0, False, None)
     assert d.pasted == [] and "Didn't catch that" in notified
 
@@ -1110,7 +1110,7 @@ class RunOOMModel(FakeModel):
 
 def test_take_that_runs_out_of_gpu_memory_switches_down_and_still_pastes(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model = RunOOMModel()
+    d.models.model = RunOOMModel()
     loads = []
     fake_gpu(monkeypatch, [1.2], loads)
     d.toggle()
@@ -1145,7 +1145,7 @@ def test_key_does_not_restart_a_daemon_still_loading(monkeypatch, state):
 
 def test_take_that_runs_out_of_memory_again_after_switching_down_is_reported(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model = RunOOMModel()
+    d.models.model = RunOOMModel()
     fake_gpu(monkeypatch, [1.2], [])
     monkeypatch.setattr(engine, "load_whisper", lambda name: RunOOMModel())  # loads, then can't run
     d.toggle()
@@ -1155,7 +1155,7 @@ def test_take_that_runs_out_of_memory_again_after_switching_down_is_reported(mon
 
 def test_take_with_no_model_that_fits_shows_only_the_memory_notice(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model = RunOOMModel()
+    d.models.model = RunOOMModel()
     fake_gpu(monkeypatch, [0.05], [])
     d.toggle()
     d.toggle()
@@ -1166,11 +1166,11 @@ def test_out_of_memory_steps_down_from_the_model_in_use(monkeypatch):
     d = make_dictation(monkeypatch)
     loads = []
     fake_gpu(monkeypatch, [1.6], loads)
-    d.model, d.model_name, d.fallback_from = RunOOMModel(), "medium", "large-v3-turbo"
+    d.models.model, d.models.name, d.models.fallback_from = RunOOMModel(), "medium", "large-v3-turbo"
     d.toggle()
     d.toggle()
-    assert loads == ["small"] and d.model_name == "small"  # medium would fit, but just failed
-    assert d.fallback_from == "large-v3-turbo"  # still back to the chosen model once there's room
+    assert loads == ["small"] and d.models.name == "small"  # medium would fit, but just failed
+    assert d.models.fallback_from == "large-v3-turbo"  # still back to the chosen model once there's room
 
 
 def test_failed_warm_up_frees_the_model(monkeypatch):
@@ -1208,24 +1208,24 @@ class LanguageModel(FakeModel):
 
 def test_language_is_detected_in_the_same_pass_and_guessed_from_the_last_take(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model = LanguageModel("fr")
-    assert d.transcribe(burst(1)) == ("hi", "fr")
-    assert d.model.calls == [(None, True), ("fr", False)]  # guessed English: redone without its prompt
-    d.model.calls.clear()
-    assert d.transcribe(burst(1)) == ("hi", "fr")
-    assert d.model.calls == [(None, False)]  # guessed right: one pass
+    d.models.model = LanguageModel("fr")
+    assert d.models.transcribe(burst(1), store.settings()) == ("hi", "fr")
+    assert d.models.model.calls == [(None, True), ("fr", False)]  # guessed English: redone without its prompt
+    d.models.model.calls.clear()
+    assert d.models.transcribe(burst(1), store.settings()) == ("hi", "fr")
+    assert d.models.model.calls == [(None, False)]  # guessed right: one pass
 
 
 def test_set_language_is_used_without_detection(monkeypatch):
     d = make_dictation(monkeypatch)
     store.save_settings({"language": "de"})
-    d.model = LanguageModel("fr")
-    assert d.transcribe(burst(1)) == ("hi", "de") and d.model.calls == [("de", False)]
+    d.models.model = LanguageModel("fr")
+    assert d.models.transcribe(burst(1), store.settings()) == ("hi", "de") and d.models.model.calls == [("de", False)]
 
 
 def test_long_take_is_not_retried_without_the_voice_filter(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.model = WhisperedModel("Yes.")
+    d.models.model = WhisperedModel("Yes.")
     audio = np.concatenate([burst(0.4), np.zeros(28 * store.RATE, dtype=np.float32)])
     d.process([audio[:, None]], 0, False, None)
     assert d.pasted == []
@@ -1236,7 +1236,7 @@ def test_transcribing_notice_does_not_hold_up_the_take(monkeypatch):
     shown, closed = threading.Event(), []
     def slow_notify(msg, **kw):
         if msg == "Transcribing…":
-            assert d.model.first_started.wait(5)  # the take transcribes while this is shown
+            assert d.models.model.first_started.wait(5)  # the take transcribes while this is shown
             shown.set()
             return "7"
     monkeypatch.setattr(desktop, "notify", slow_notify)
@@ -1352,3 +1352,15 @@ def test_dataset_size_is_cached_and_notices_changes(monkeypatch):
     first = min(n for n in os.listdir(store.RECORDINGS) if n.endswith(".wav"))
     os.remove(os.path.join(store.RECORDINGS, first))
     assert store.dataset_size(meta) == (1, 2.0)  # deleted by hand
+
+
+def test_model_manager_steps_down_and_back_on_its_own(monkeypatch):
+    free, loads = [1.2], []
+    fake_gpu(monkeypatch, free, loads)
+    m = engine.ModelManager(OOMModel())
+    assert m.ensure_loaded() and m.name == "small" and m.fallback_from == "large-v3-turbo"
+    assert m.transcribe(burst(1), store.settings()) == ("take1", "en")
+    free[0] = 4.0
+    m.restore_if_room()
+    assert loads == ["small", "mobiuslabsgmbh/faster-whisper-large-v3-turbo"]
+    assert m.fallback_from is None and m.name == "large-v3-turbo"
