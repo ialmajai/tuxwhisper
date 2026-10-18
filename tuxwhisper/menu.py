@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 
 from tuxwhisper import daemon, desktop, engine, llm, store
 
@@ -139,28 +140,26 @@ def pick_asr_model(current):
 
 
 def menu_choice(rows):
-    """Show the settings list (rows: key, setting, value, ...) and return the picked key or None,
-    with each row's help in a column of its own."""
+    """Show the settings list (rows: (key, setting, value, help)) and return the picked key or
+    None, with each row's help in a column of its own."""
     text = "--text=Pick a row to change it. Most changes apply to your next dictation."
-    triples = [rows[i:i + 3] for i in range(0, len(rows), 3)]
     if desktop.have_yad():
         # No hidden key column here, so rows are told apart by their visible names.
-        by_name = {name: key for key, name, _ in triples}
+        by_name = {name: key for key, name, _, _ in rows}
         r = subprocess.run(["yad", *desktop.YAD_APP, "--list", "--title=TuxWhisper Settings",
-                            *desktop.fit(("Setting", "Value", "What it does"),
-                                         [(n, v, MENU_HELP[k]) for k, n, v in triples]),
+                            *desktop.fit(("Setting", "Value", "What it does"), [row[1:] for row in rows]),
                             "--center", text, "--column=Setting", "--column=Value", "--column=What it does",
                             "--print-column=1",
                             "--button=Close:1", "--button=Select:0", "--",
-                            *[x for key, name, value in triples for x in (name, value, MENU_HELP[key])]],
+                            *[x for row in rows for x in row[1:]]],
                            capture_output=True, text=True)
         name = r.stdout.strip().split("|")[0]
         return by_name.get(name) if r.returncode == 0 else None
     choice = desktop.zenity("--list", "--title=TuxWhisper Settings",
-                    *desktop.fit(("Setting", "Value", "What it does"), [(n, v, MENU_HELP[k]) for k, n, v in triples]), text,
+                    *desktop.fit(("Setting", "Value", "What it does"), [row[1:] for row in rows]), text,
                     "--column=key", "--column=Setting", "--column=Value", "--column=What it does",
                     "--hide-column=1", "--print-column=1", "--ok-label=Select", "--cancel-label=Close",
-                    *[x for key, name, value in triples for x in (key, name, value, MENU_HELP[key])])
+                    *[x for row in rows for x in row])
     return choice.split("|")[0] if choice else None
 
 
@@ -169,26 +168,6 @@ def unload_label(minutes, never):
     if minutes == never or minutes < 0:
         return "always loaded"
     return "unload right after use" if minutes == 0 else f"unload after {minutes} min idle"
-
-
-MENU_HELP = {
-    "sounds": "Beep when recording starts and stops",
-    "sound_volume": "How loud the beeps are",
-    "language": "The language you speak; fixed avoids misdetection on short clips",
-    "paste_key": "Key used to paste; try Ctrl+V if an app doesn't paste",
-    "keys": "The keys for dictation, cleanup, saving and this menu",
-    "mode": "What LLM cleanup does: clean up, fix grammar, email, bullet points…",
-    "rewrite_model": "The Ollama model used for LLM cleanup",
-    "mode_model": "A different LLM model for this cleanup style only",
-    "asr_model": "The Whisper model: bigger is more accurate, smaller is faster",
-    "asr_unload_minutes": "Free GPU memory when you haven't dictated for a while; reloads in under a second",
-    "llm_unload_minutes": "Free the cleanup model's GPU memory after a while; reloading takes a few seconds",
-    "correct": "Fix the last transcript; TuxWhisper offers to remember the fix for next time",
-    "history": "Your last 20 transcripts; pick one to copy it again",
-    "vocab": "Names and jargon Whisper should spell right (English)",
-    "replacements": 'Spoken words to replace, e.g. "new line" with a line break',
-    "modes": "Your own cleanup styles, as Name => instruction",
-}
 
 
 # The paste keys as people write them; the settings file keeps store.PASTE_KEYS' names.
@@ -203,132 +182,183 @@ def keys_summary():
     return ", ".join(keys)
 
 
+@dataclasses.dataclass
+class Setting:
+    """One row of the settings menu. edit asks for a new value and returns the settings to save,
+    or None when there's nothing to save (cancelled, or an action such as a dialog of its own);
+    after runs once they're saved."""
+    key: str  # a config.toml key, whose row says "(default)" until it's set; else just an ID
+    label: str  # {mode} is the current cleanup style
+    value: Callable[[store.Settings], str]
+    edit: Callable[[store.Settings], dict | None]
+    help: str
+    after: Callable[[], None] | None = None
+
+
+def edit_language(s):
+    names = {"auto-detect": "", **{f"{n} ({c})": c for c, n in store.LANGUAGES.items()}}
+    current = next((n for n, c in names.items() if c == s.language), "auto-detect")
+    picked = desktop.pick("Language", list(names), current)
+    return {"language": names[picked]} if picked else None
+
+
+def edit_paste_key(s):
+    labels = {PASTE_LABELS[k]: k for k in store.PASTE_KEYS}
+    picked = desktop.pick("Paste key", list(labels), PASTE_LABELS[s.paste_key])
+    return {"paste_key": labels[picked]} if picked else None
+
+
+def edit_unload(key, title, never):
+    """An idle-unload setting's editor; never is the value that means "keep loaded"."""
+    options = [-1, 5, 10, 30, 60] if never == 0 else [0, 5, 10, 30, 60, -1]
+    def edit(s):
+        labels = {unload_label(m, never): m for m in options}
+        picked = desktop.pick(title, list(labels), unload_label(getattr(s, key), never))
+        return {key: max(labels[picked], never)} if picked else None  # "always loaded" is stored as never
+    return edit
+
+
+def edit_sound_volume(s):
+    picked = desktop.zenity("--scale", "--title=Sound volume", "--min-value=0", "--max-value=100",
+                            "--step=5", f"--value={s.sound_volume}", "--text=Percent of your system volume:")
+    return {"sound_volume": int(picked)} if picked else None
+
+
+def edit_mode(s):
+    picked = desktop.pick("Cleanup style", list(llm.modes()), llm.current_mode())
+    return {"mode": picked} if picked else None
+
+
+def ollama_models():
+    """The installed Ollama models, so cleanup can't be pointed at one that doesn't exist; None
+    (after saying why) when there are none to offer."""
+    try:
+        models = sorted(m["name"] for m in llm.ollama("/api/tags", timeout=3)["models"])
+    except (OSError, ValueError, KeyError):
+        desktop.zenity("--error", "--title=Cleanup model",
+                       f"--text=Can't reach Ollama at {llm.OLLAMA_URL}. Start it and try again.")
+        return None
+    if not models:
+        desktop.zenity("--info", "--title=Cleanup model",
+                       "--text=No Ollama models installed. Install one with: ollama pull llama3.2")
+        return None
+    return models
+
+
+def edit_rewrite_model(s):
+    models = ollama_models()
+    if not models:
+        return None
+    current = s.rewrite_model
+    picked = desktop.pick("Cleanup model", models, current if ":" in current else current + ":latest")
+    return {"rewrite_model": picked} if picked else None
+
+
+def edit_mode_model(s):
+    models = ollama_models()
+    if not models:
+        return None
+    mode, same = llm.current_mode(), "same as cleanup model"
+    picked = desktop.pick(f"Model for {mode}", [same, *models], s.mode_models.get(mode, same))
+    if not picked:
+        return None
+    mode_models = {k: v for k, v in s.mode_models.items() if k != mode}
+    if picked != same:
+        mode_models[mode] = picked
+    return {"mode_models": mode_models}
+
+
+def show_history(s):
+    """Recent transcripts: pick one to copy it again. Saves nothing."""
+    items = store.load_history()[::-1]  # newest first
+    if not items:
+        desktop.zenity("--info", "--title=Recent transcripts", "--text=Nothing dictated this session yet.")
+        return
+    rows = [x for i, h in enumerate(items)
+            for x in (str(i), h["time"], h["text"].replace("\n", " ⏎ ")[:90])]
+    picked = desktop.zenity("--list", "--title=Recent transcripts", *desktop.fit(("Time", "Text"), zip(rows[1::3], rows[2::3])),
+                    "--text=Pick one to copy it to the clipboard.",
+                    "--column=i", "--column=Time", "--column=Text",
+                    "--hide-column=1", "--print-column=1", "--ok-label=Copy", *rows)
+    if picked:
+        desktop.clipboard_set(items[int(picked.split("|")[0])]["text"])
+        desktop.notify("Copied", body="Paste it with Ctrl+V.")
+
+
+def action(fn):
+    """A row that runs fn (a dialog of its own) and saves nothing here."""
+    def run(s):
+        fn()
+    return run
+
+
+def edit_file(path, title, header):
+    return action(lambda: desktop.edit_list(path, title, header))
+
+
+# In groups: past transcripts, speech, LLM cleanup, then keys and sounds.
+SETTINGS = [
+    Setting("correct", "Correct last transcript", lambda s: "Fix…", action(lambda: correct_last()),
+            "Fix the last transcript; TuxWhisper offers to remember the fix for next time"),
+    Setting("history", "Recent transcripts", lambda s: f"{len(store.load_history())} this session", show_history,
+            "Your last 20 transcripts; pick one to copy it again"),
+    Setting("language", "Language", lambda s: store.LANGUAGES.get(s.language, "auto-detect"), edit_language,
+            "The language you speak; fixed avoids misdetection on short clips"),
+    Setting("asr_model", "Speech model", lambda s: s.asr_model or engine.short_name(engine.default_asr_model()),
+            lambda s: pick_asr_model(s.asr_model),  # returns None: it saves and restarts itself
+            "The Whisper model: bigger is more accurate, smaller is faster"),
+    Setting("asr_unload_minutes", "Speech model in memory", lambda s: unload_label(s.asr_unload_minutes, 0),
+            edit_unload("asr_unload_minutes", "Speech model in memory", 0),
+            "Free GPU memory when you haven't dictated for a while; reloads in under a second"),
+    Setting("vocab", "Vocabulary", lambda s: "Edit…", edit_file(store.VOCAB, "Vocabulary", store.VOCAB_HEADER),
+            "Names and jargon Whisper should spell right (English)"),
+    Setting("replacements", "Replacements", lambda s: "Edit…",
+            edit_file(store.REPLACEMENTS, "Replacements", store.REPLACEMENTS_HEADER),
+            'Spoken words to replace, e.g. "new line" with a line break'),
+    Setting("mode", "Cleanup style", lambda s: llm.current_mode(), edit_mode,
+            "What LLM cleanup does: clean up, fix grammar, email, bullet points…"),
+    Setting("rewrite_model", "Cleanup model", lambda s: s.rewrite_model, edit_rewrite_model,
+            "The Ollama model used for LLM cleanup"),
+    Setting("mode_model", "Model for {mode}", lambda s: s.mode_models.get(llm.current_mode(), "same as cleanup model"),
+            edit_mode_model, "A different LLM model for this cleanup style only"),
+    Setting("llm_unload_minutes", "LLM in memory", lambda s: unload_label(s.llm_unload_minutes, -1),
+            edit_unload("llm_unload_minutes", "LLM in memory", -1),
+            "Free the cleanup model's GPU memory after a while; reloading takes a few seconds"),
+    Setting("modes", "Custom cleanup styles", lambda s: "Edit…",
+            edit_file(store.MODES_FILE, "Custom cleanup styles",
+                      "# One cleanup style per line: Name => instruction for the LLM, e.g.\n"
+                      "# Tweet => Rewrite as a tweet under 280 characters.\n"),
+            "Your own cleanup styles, as Name => instruction"),
+    Setting("keys", "Keys", lambda s: keys_summary(), action(lambda: keys_menu()),
+            "The keys for dictation, cleanup, saving and this menu"),
+    Setting("paste_key", "Paste key", lambda s: PASTE_LABELS[s.paste_key], edit_paste_key,
+            "Key used to paste; try Ctrl+V if an app doesn't paste"),
+    Setting("sounds", "Sounds", lambda s: "On" if s.sounds else "Off", lambda s: {"sounds": not s.sounds},
+            "Beep when recording starts and stops"),
+    Setting("sound_volume", "Sound volume", lambda s: f"{s.sound_volume}%", edit_sound_volume,
+            "How loud the beeps are", after=lambda: desktop.sound("device-added")),  # a preview
+]
+
+
 def settings_menu():
     if not shutil.which("zenity"):
         sys.exit("The settings menu needs zenity (e.g. sudo apt install zenity).")
+    fields = {f.name for f in dataclasses.fields(store.Settings)}
     while True:
-        s, cfg = store.settings(), store.read_config()
-        start = dict(cfg)
+        s, cfg, mode = store.settings(), store.read_config(), llm.current_mode()
         # The menu can't see the service's environment, so unchanged settings say so.
-        tag = {f.name: "" if f.name in cfg else " (default)" for f in dataclasses.fields(s)}
-        mode = llm.current_mode()
-        # In groups: past transcripts, speech, LLM cleanup, then keys and sounds.
-        rows = ["correct", "Correct last transcript", "Fix…",
-                "history", "Recent transcripts", f"{len(store.load_history())} this session",
-                "language", "Language", store.LANGUAGES.get(s.language, "auto-detect") + tag["language"],
-                "asr_model", "Speech model", (s.asr_model or engine.short_name(engine.default_asr_model()))
-                + tag["asr_model"],
-                "asr_unload_minutes", "Speech model in memory", unload_label(s.asr_unload_minutes, 0)
-                + tag["asr_unload_minutes"],
-                "vocab", "Vocabulary", "Edit…",
-                "replacements", "Replacements", "Edit…",
-                "mode", "Cleanup style", mode + tag["mode"],
-                "rewrite_model", "Cleanup model", s.rewrite_model + tag["rewrite_model"],
-                "mode_model", f"Model for {mode}", s.mode_models.get(mode, "same as cleanup model"),
-                "llm_unload_minutes", "LLM in memory", unload_label(s.llm_unload_minutes, -1)
-                + tag["llm_unload_minutes"],
-                "modes", "Custom cleanup styles", "Edit…",
-                "keys", "Keys", keys_summary(),
-                "paste_key", "Paste key", PASTE_LABELS[s.paste_key] + tag["paste_key"],
-                "sounds", "Sounds", ("On" if s.sounds else "Off") + tag["sounds"],
-                "sound_volume", "Sound volume", f"{s.sound_volume}%" + tag["sound_volume"]]
+        rows = [(row.key, row.label.replace("{mode}", mode),
+                 row.value(s) + (" (default)" if row.key in fields and row.key not in cfg else ""), row.help)
+                for row in SETTINGS]
         choice = menu_choice(rows)
         if not choice:
             return
-        if choice == "sounds":
-            cfg["sounds"] = not s.sounds
-        elif choice == "sound_volume":
-            picked = desktop.zenity("--scale", "--title=Sound volume", "--min-value=0", "--max-value=100",
-                            "--step=5", f"--value={s.sound_volume}",
-                            "--text=Percent of your system volume:")
-            if picked:
-                store.update_settings({"sound_volume": int(picked)})
-                desktop.sound("device-added")  # preview
-                continue
-        elif choice == "language":
-            names = {"auto-detect": "", **{f"{n} ({c})": c for c, n in store.LANGUAGES.items()}}
-            current = next((n for n, c in names.items() if c == s.language), "auto-detect")
-            picked = desktop.pick("Language", list(names), current)
-            if picked:
-                cfg["language"] = names[picked]
-        elif choice == "paste_key":
-            labels = {PASTE_LABELS[k]: k for k in store.PASTE_KEYS}
-            picked = desktop.pick("Paste key", list(labels), PASTE_LABELS[s.paste_key])
-            if picked:
-                cfg["paste_key"] = labels[picked]
-        elif choice in ("asr_unload_minutes", "llm_unload_minutes"):
-            never = 0 if choice == "asr_unload_minutes" else -1
-            options = [-1, 5, 10, 30, 60] if never == 0 else [0, 5, 10, 30, 60, -1]
-            labels = {unload_label(m, never): m for m in options}
-            title = "Speech model in memory" if never == 0 else "LLM in memory"
-            picked = desktop.pick(title, list(labels), unload_label(getattr(s, choice), never))
-            if picked:
-                cfg[choice] = max(labels[picked], never)  # "always loaded" is stored as never
-        elif choice == "asr_model":
-            pick_asr_model(s.asr_model)
-            continue
-        elif choice == "keys":
-            keys_menu()
-            continue
-        elif choice == "mode":
-            picked = desktop.pick("Cleanup style", list(llm.modes()), mode)
-            if picked:
-                cfg["mode"] = picked
-        elif choice == "modes":
-            desktop.edit_list(store.MODES_FILE, "Custom cleanup styles",
-                      "# One cleanup style per line: Name => instruction for the LLM, e.g.\n"
-                      "# Tweet => Rewrite as a tweet under 280 characters.\n")
-            continue
-        elif choice in ("rewrite_model", "mode_model"):
-            # Offer only installed models, so cleanup can't be pointed at one that doesn't exist.
-            try:
-                models = sorted(m["name"] for m in llm.ollama("/api/tags", timeout=3)["models"])
-            except (OSError, ValueError, KeyError):
-                desktop.zenity("--error", "--title=Cleanup model",
-                       f"--text=Can't reach Ollama at {llm.OLLAMA_URL}. Start it and try again.")
-                continue
-            if not models:
-                desktop.zenity("--info", "--title=Cleanup model",
-                       "--text=No Ollama models installed. Install one with: ollama pull llama3.2")
-                continue
-            if choice == "rewrite_model":
-                current = s.rewrite_model
-                picked = desktop.pick("Cleanup model", models, current if ":" in current else current + ":latest")
-                if picked:
-                    cfg["rewrite_model"] = picked
-            else:
-                same = "same as cleanup model"
-                picked = desktop.pick(f"Model for {mode}", [same, *models], s.mode_models.get(mode, same))
-                if picked:
-                    cfg["mode_models"] = {k: v for k, v in s.mode_models.items() if k != mode}
-                    if picked != same:
-                        cfg["mode_models"][mode] = picked
-        elif choice == "history":
-            items = store.load_history()[::-1]  # newest first
-            if not items:
-                desktop.zenity("--info", "--title=Recent transcripts", "--text=Nothing dictated this session yet.")
-                continue
-            rows = [x for i, h in enumerate(items)
-                    for x in (str(i), h["time"], h["text"].replace("\n", " ⏎ ")[:90])]
-            picked = desktop.zenity("--list", "--title=Recent transcripts", *desktop.fit(("Time", "Text"), zip(rows[1::3], rows[2::3])),
-                            "--text=Pick one to copy it to the clipboard.",
-                            "--column=i", "--column=Time", "--column=Text",
-                            "--hide-column=1", "--print-column=1", "--ok-label=Copy", *rows)
-            if picked:
-                desktop.clipboard_set(items[int(picked.split("|")[0])]["text"])
-                desktop.notify("Copied", body="Paste it with Ctrl+V.")
-            continue
-        elif choice == "correct":
-            correct_last()
-            continue
-        elif choice == "vocab":
-            desktop.edit_list(store.VOCAB, "Vocabulary", store.VOCAB_HEADER)
-            continue
-        elif choice == "replacements":
-            desktop.edit_list(store.REPLACEMENTS, "Replacements",
-                      store.REPLACEMENTS_HEADER)
-            continue
-        store.update_settings({k: v for k, v in cfg.items() if k not in start or start[k] != v})
+        row = next(r for r in SETTINGS if r.key == choice)
+        changes = row.edit(s)
+        if changes is not None:
+            store.update_settings(changes)
+            if row.after:
+                row.after()
 
 
 

@@ -1375,3 +1375,59 @@ def test_model_manager_steps_down_and_back_on_its_own(monkeypatch):
     m.restore_if_room()
     assert loads == ["small", "mobiuslabsgmbh/faster-whisper-large-v3-turbo"]
     assert m.fallback_from is None and m.name == "large-v3-turbo"
+
+
+# --- the settings menu, driven through its dialogs --------------------------------------------
+
+def drive_settings_menu(monkeypatch, picks, answers):
+    """Run settings_menu with fake dialogs: the menu picks each of picks in turn, then Close;
+    every other dialog returns the next of answers. Returns the menu rows shown each time,
+    as {key: value}."""
+    picks, answers, shown = iter(picks), iter(answers), []
+    def dialog(*args):
+        if "--title=TuxWhisper Settings" in args:
+            rows = args[next(i for i, a in enumerate(args) if not a.startswith("-")):]
+            shown.append(dict(zip(rows[0::4], rows[2::4])))
+            return next(picks, None)
+        return next(answers)
+    monkeypatch.setattr(desktop, "have_yad", lambda: False)
+    monkeypatch.setattr(desktop, "zenity", dialog)
+    monkeypatch.setattr(desktop, "gnome_shortcuts", lambda: None)
+    monkeypatch.setattr(menu.shutil, "which", lambda name: "/usr/bin/zenity")
+    menu.settings_menu()
+    return shown
+
+
+def test_settings_menu_toggles_sounds(monkeypatch):
+    shown = drive_settings_menu(monkeypatch, ["sounds"], [])
+    assert store.read_config() == {"sounds": False}
+    assert shown[0]["sounds"] == "On (default)" and shown[1]["sounds"] == "Off"
+
+
+def test_settings_menu_sets_the_language(monkeypatch):
+    shown = drive_settings_menu(monkeypatch, ["language"], ["French (fr)"])
+    assert store.read_config() == {"language": "fr"}
+    assert shown[0]["language"] == "auto-detect (default)" and shown[1]["language"] == "French"
+
+
+def test_settings_menu_sets_the_cleanup_style(monkeypatch):
+    shown = drive_settings_menu(monkeypatch, ["mode"], ["Email"])
+    assert store.read_config() == {"mode": "Email"}
+    assert shown[1]["mode"] == "Email"
+
+
+def test_settings_menu_sets_the_paste_key(monkeypatch):
+    drive_settings_menu(monkeypatch, ["paste_key"], ["Ctrl+V"])
+    assert store.read_config() == {"paste_key": "ctrl+v"}
+
+
+def test_settings_menu_saves_the_volume_then_previews_it(monkeypatch):
+    played = []
+    monkeypatch.setattr(desktop, "sound", lambda name: played.append(store.settings().sound_volume))
+    drive_settings_menu(monkeypatch, ["sound_volume"], ["55"])
+    assert store.read_config() == {"sound_volume": 55} and played == [55]
+
+
+def test_settings_menu_cancelled_dialog_saves_nothing(monkeypatch):
+    drive_settings_menu(monkeypatch, ["language", "paste_key", "sound_volume"], [None, None, None])
+    assert not os.path.exists(store.CONFIG)
