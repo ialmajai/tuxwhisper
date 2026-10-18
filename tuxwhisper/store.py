@@ -9,7 +9,6 @@ import re
 import shutil
 import time
 import tomllib
-import wave
 
 APP = "tuxwhisper"
 LANGUAGE = os.environ.get("ASR_LANGUAGE") or None  # e.g. "en"; None = auto-detect
@@ -141,16 +140,48 @@ def apply_replacements(text):
 
 def dataset_size(meta):
     """Number of saved takes and their total length in seconds."""
+    takes, frames = dataset_frames(meta)
+    return takes, frames / RATE
+
+
+# The saved takes' count and length, so a save needn't go through every recording.
+SIZE_CACHE = ".size-cache.json"
+WAV_HEADER = 44  # bytes before the samples in the files write_recording makes; 2 bytes a sample
+
+
+def dataset_frames(meta):
+    """(takes, samples) of the recordings listed in meta: from the cache when it's current,
+    else from the files' sizes (no need to open each one)."""
+    cache = os.path.join(os.path.dirname(meta), SIZE_CACHE)
+    try:
+        with open(cache) as f:
+            c = json.load(f)
+        if c["stamp"] == size_stamp(meta) and os.stat(os.path.dirname(meta)).st_mtime_ns <= os.stat(cache).st_mtime_ns:
+            return c["takes"], c["frames"]
+    except (OSError, ValueError, KeyError, TypeError):  # none yet, or unreadable: count again
+        pass
     takes, frames = 0, 0
     with open(meta, newline="") as f:
         for row in csv.DictReader(f):
             try:
-                with wave.open(os.path.join(RECORDINGS, row["file_name"])) as w:
-                    frames += w.getnframes()
+                frames += max(0, os.path.getsize(os.path.join(RECORDINGS, row["file_name"])) - WAV_HEADER) // 2
                 takes += 1
-            except (OSError, KeyError, wave.Error):  # file deleted by hand
+            except (OSError, KeyError, TypeError):  # file deleted by hand
                 pass
-    return takes, frames / RATE
+    return takes, frames
+
+
+def size_stamp(meta):
+    """Changes whenever meta does, e.g. a transcript fixed or a row removed by hand."""
+    st = os.stat(meta)
+    return [st.st_size, st.st_mtime_ns]
+
+
+def save_dataset_size(meta, takes, frames):
+    """Cache the dataset's size for meta as it is now (under file_lock(meta)). Written in
+    place: the folder changing after it (a recording deleted by hand) makes it stale."""
+    with open(os.path.join(os.path.dirname(meta), SIZE_CACHE), "w") as f:
+        json.dump({"takes": takes, "frames": frames, "stamp": size_stamp(meta)}, f)
 
 
 def history_path():

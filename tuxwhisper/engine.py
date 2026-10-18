@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import types
 import urllib.request
 
 from tuxwhisper import desktop, store
@@ -143,12 +144,13 @@ class WhisperCpp:
         # whisper.cpp has no hotwords; the vocabulary joins the prompt instead.
         prompt = " ".join(p for p in (initial_prompt, hotwords) if p)
         params = {"vad": True, "vad_model_path": self.vad_model}
-        if language:
-            params["language"] = language
         if prompt:
             params["initial_prompt"] = prompt
         with self.quiet():
-            return self.model.transcribe(audio, **params), None
+            # Detected here so the caller gets it like faster-whisper's info.language.
+            language = language or self.model.auto_detect_language(audio)[0][0]
+            params["language"] = language
+            return self.model.transcribe(audio, **params), types.SimpleNamespace(language=language)
 
 
 def download_verified(url, path, sha256, timeout=60):

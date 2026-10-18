@@ -17,7 +17,7 @@ import shutil
 import subprocess
 import sys
 
-from tuxwhisper import daemon, desktop, menu, store
+from tuxwhisper import store
 
 
 def migrate_old_files():
@@ -64,17 +64,23 @@ def main():
         migrate_old_files()
     if cmd == "serve":
         add_library_path()
+        from tuxwhisper import daemon
         daemon.serve()
-    elif cmd in ("toggle", "rewrite", "save"):
-        daemon.send(cmd)
+    elif cmd in ("toggle", "rewrite", "save"):  # every key press: import only the socket client
+        from tuxwhisper import client
+        client.send(cmd)
     elif cmd == "settings":
+        from tuxwhisper import menu
         menu.with_service_env()
         menu.settings_menu()
     elif cmd == "bind":
+        from tuxwhisper import desktop
         desktop.bind_gnome()
     elif cmd == "correct":
+        from tuxwhisper import menu
         menu.correct_last()
     elif cmd == "download" and len(sys.argv) > 2:
+        from tuxwhisper import menu
         menu.download_asr_model(sys.argv[2])
     elif cmd == "setup":
         run_script("install.sh", sys.argv[2:])

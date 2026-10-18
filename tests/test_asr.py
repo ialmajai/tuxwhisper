@@ -12,7 +12,7 @@ import types
 import numpy as np
 import pytest
 
-from tuxwhisper import daemon, desktop, engine, llm, menu, store
+from tuxwhisper import client, daemon, desktop, engine, llm, menu, store
 
 real_add_history = store.add_history  # the fixture below stubs it out for the dictation tests
 real_notify = desktop.notify
@@ -181,10 +181,10 @@ class FakeModel:
 def make_dictation(monkeypatch):
     d = daemon.Dictation(FakeModel(), types.SimpleNamespace(InputStream=FakeStream), kbd=None, ec=None)
     d.pasted = []
-    d.paste = lambda text: d.pasted.append(text.strip()) or True
+    d.paste = lambda text, snapshot=None: d.pasted.append(text.strip()) or True
     d.refresh_hint = lambda: None
     monkeypatch.setattr(llm, "warm_rewrite_model", lambda: None)
-    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang: f"CLEANED:{text}")
+    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None: f"CLEANED:{text}")
     FakeStream.fail_start = False
     return d
 
@@ -775,7 +775,7 @@ def test_retype_refuses_while_a_take_is_in_flight(monkeypatch):
 def test_history_records_whether_the_take_was_typed(monkeypatch):
     d = make_dictation(monkeypatch)
     monkeypatch.setattr(store, "add_history", real_add_history)
-    d.paste = lambda text: False  # e.g. the clipboard couldn't be set
+    d.paste = lambda text, snapshot=None: False  # e.g. the clipboard couldn't be set
     d.toggle()
     d.toggle()
     assert store.load_history()[-1]["typed"] is False
@@ -992,7 +992,7 @@ def test_empty_take_is_reported(monkeypatch):
 
 
 def test_context_size_grows_with_the_transcript():
-    assert llm.context_size("x" * 1500, "word " * 50) == 1024
+    assert llm.context_size("x" * 1500, "word " * 50) == 4096
     assert llm.context_size("x" * 1500, "word " * 700) == 4096
     assert llm.context_size("x" * 1500, "word " * 1100) == 8192
     assert llm.context_size("x" * 1500, "word " * 3000) is None
@@ -1000,7 +1000,7 @@ def test_context_size_grows_with_the_transcript():
 
 @pytest.mark.parametrize("reply", [
     {"done_reason": "length", "prompt_eval_count": 10, "eval_count": 10},
-    {"done_reason": "stop", "prompt_eval_count": 1000, "eval_count": 30},  # input was trimmed
+    {"done_reason": "stop", "prompt_eval_count": 4070, "eval_count": 30},  # input was trimmed
 ])
 def test_cleanup_that_ran_out_of_room_pastes_the_plain_transcript(monkeypatch, reply):
     monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
@@ -1121,12 +1121,12 @@ def test_take_that_runs_out_of_gpu_memory_switches_down_and_still_pastes(monkeyp
 
 def fake_systemctl(monkeypatch, state):
     """The daemon isn't answering and systemd reports it as state; the commands run are returned."""
-    monkeypatch.setattr(daemon, "request", lambda cmd, timeout=5: None)
+    monkeypatch.setattr(client, "request", lambda cmd, timeout=5: None)
     ran = []
-    monkeypatch.setattr(daemon.subprocess, "run", lambda cmd, **k: ran.append(cmd) or types.SimpleNamespace(
+    monkeypatch.setattr(client.subprocess, "run", lambda cmd, **k: ran.append(cmd) or types.SimpleNamespace(
         returncode=0, stdout=state + "\n"))
     with pytest.raises(SystemExit):
-        daemon.send("toggle")
+        client.send("toggle")
     return ran
 
 
@@ -1188,3 +1188,167 @@ def test_failed_warm_up_frees_the_model(monkeypatch):
     with pytest.raises(RuntimeError):
         engine.load_whisper("tiny")
     assert freed == [True]
+
+
+# --- latency ---------------------------------------------------------------------------------
+
+class LanguageModel(FakeModel):
+    """Reports the language it detects, like faster-whisper's info.language."""
+    def __init__(self, lang):
+        super().__init__()
+        self.lang, self.calls = lang, []
+
+    def detect_language(self, audio, **_):
+        raise AssertionError("detected separately")
+
+    def transcribe(self, audio, language=None, initial_prompt=None, **_):
+        self.calls.append((language, initial_prompt is not None))
+        return [types.SimpleNamespace(text="hi")], types.SimpleNamespace(language=language or self.lang)
+
+
+def test_language_is_detected_in_the_same_pass_and_guessed_from_the_last_take(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model = LanguageModel("fr")
+    assert d.transcribe(burst(1)) == ("hi", "fr")
+    assert d.model.calls == [(None, True), ("fr", False)]  # guessed English: redone without its prompt
+    d.model.calls.clear()
+    assert d.transcribe(burst(1)) == ("hi", "fr")
+    assert d.model.calls == [(None, False)]  # guessed right: one pass
+
+
+def test_set_language_is_used_without_detection(monkeypatch):
+    d = make_dictation(monkeypatch)
+    store.save_settings({"language": "de"})
+    d.model = LanguageModel("fr")
+    assert d.transcribe(burst(1)) == ("hi", "de") and d.model.calls == [("de", False)]
+
+
+def test_long_take_is_not_retried_without_the_voice_filter(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.model = WhisperedModel("Yes.")
+    audio = np.concatenate([burst(0.4), np.zeros(28 * store.RATE, dtype=np.float32)])
+    d.process([audio[:, None]], 0, False, None)
+    assert d.pasted == []
+
+
+def test_transcribing_notice_does_not_hold_up_the_take(monkeypatch):
+    d = make_dictation(monkeypatch)
+    shown, closed = threading.Event(), []
+    def slow_notify(msg, **kw):
+        if msg == "Transcribing…":
+            assert d.model.first_started.wait(5)  # the take transcribes while this is shown
+            shown.set()
+            return "7"
+    monkeypatch.setattr(desktop, "notify", slow_notify)
+    monkeypatch.setattr(desktop, "close_notification", lambda nid: closed.append(nid))
+    d.toggle()
+    d.toggle()
+    assert shown.is_set() and closed == ["7"] and d.pasted == ["take1"]
+
+
+def test_paste_restores_the_clipboard_read_during_transcription(monkeypatch):
+    monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
+    d = make_dictation(monkeypatch)
+    del d.paste  # the real one
+    d.ec = types.SimpleNamespace(EV_KEY=1, KEY_LEFTCTRL=29, KEY_V=47, KEY_LEFTSHIFT=42, KEY_INSERT=110)
+    d.kbd = FakeKeyboard()
+    board = {"clipboard": "old", "primary": "old primary"}
+    monkeypatch.setattr(desktop, "clipboard_get", lambda sel="clipboard": board[sel])
+    sets = []
+    monkeypatch.setattr(desktop, "clipboard_set", lambda text, sel="clipboard": sets.append((sel, text)) or True)
+    store.save_settings({"paste_key": "ctrl+v"})
+    snapshot = d.snapshot_clipboard()
+    store.save_settings({"paste_key": "shift+insert"})  # changed mid-take: primary is read at paste
+    assert d.paste("hi ", snapshot)
+    assert sorted(sets) == sorted([("clipboard", "hi "), ("primary", "hi "),
+                                   ("clipboard", "old"), ("primary", "old primary")])
+    assert sets.index(("clipboard", "old")) > sets.index(("clipboard", "hi "))
+
+
+def test_cli_key_commands_import_only_the_socket_client():
+    code = ("import sys; from tuxwhisper import asr, client; "
+            "print([m for m in ('tuxwhisper.engine', 'tuxwhisper.llm', 'tuxwhisper.menu', "
+            "'tuxwhisper.daemon', 'urllib.request', 'http.client') if m in sys.modules])")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
+    assert out.strip() == "[]"
+
+
+def test_warm_up_and_cleanup_use_the_same_context():
+    assert llm.OLLAMA_OPTIONS["num_ctx"] == llm.context_size("x" * 1500, "word " * 300)
+
+
+def test_cleanup_trusts_the_warm_up(monkeypatch):
+    def checked():
+        raise AssertionError("checked the GPU again")
+    monkeypatch.setattr(llm, "rewrite_model_on_gpu", checked)
+    monkeypatch.setattr(llm, "ollama", lambda path, payload, timeout=30: {
+        "done_reason": "stop", "message": {"content": '{"cleaned": "The take."}'}})
+    assert llm.llm_cleanup("um the take", "en", on_gpu=True) == "The take."
+
+
+def test_take_passes_the_warm_up_result_to_the_cleanup(monkeypatch):
+    d = make_dictation(monkeypatch)
+    monkeypatch.setattr(llm, "warm_rewrite_model", lambda: True)
+    got = []
+    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None: got.append(on_gpu) or text)
+    d.toggle(rewrite=True)
+    d.toggle()
+    assert got == [True]
+
+
+def test_connection_command_runs(monkeypatch):
+    import socket
+    d = types.SimpleNamespace(presses=[])
+    d.press = lambda rewrite=False: d.presses.append(rewrite)
+    a, b = socket.socketpair()
+    b.sendall(b"rewrite")
+    b.shutdown(socket.SHUT_WR)
+    daemon.handle(d, a)
+    assert d.presses == [True]
+
+
+def test_take_stopped_during_a_retype_pastes_after_it(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
+    d.kbd = FakeKeyboard()
+    order = []
+    typing = threading.Event()
+    def paste(text, snapshot=None):
+        if text == "Hello ":
+            typing.set()
+            time.sleep(0.2)
+        order.append(text.strip())
+        return True
+    d.paste = paste
+    with open(store.retype_path(), "w") as f:
+        f.write('{"delete": 1, "text": "Hello"}')
+    retyping = threading.Thread(target=d.retype)
+    retyping.start()
+    assert typing.wait(5)
+    d.toggle()
+    d.toggle()
+    retyping.join()
+    assert order == ["Hello", "take1"]
+
+
+def test_settings_key_is_looked_up_at_most_every_few_minutes(monkeypatch):
+    d = make_dictation(monkeypatch)
+    looked = []
+    d.refresh_hint = lambda: looked.append(1)
+    monkeypatch.setattr(daemon.threading, "Thread", InlineThread)
+    for _ in range(3):
+        d.process([burst(1)[:, None]], 0, False, None)
+    assert looked == [1]
+
+
+def test_dataset_size_is_cached_and_notices_changes(monkeypatch):
+    d = make_dictation(monkeypatch)
+    for seconds in (1, 2):
+        d.write_recording(np.zeros(seconds * store.RATE, dtype=np.float32), "hi", None)
+        time.sleep(1.1)  # recordings are named by the second
+    meta = os.path.join(store.RECORDINGS, "metadata.csv")
+    assert os.path.exists(os.path.join(store.RECORDINGS, store.SIZE_CACHE))
+    assert store.dataset_size(meta) == (2, 3.0)
+    first = min(n for n in os.listdir(store.RECORDINGS) if n.endswith(".wav"))
+    os.remove(os.path.join(store.RECORDINGS, first))
+    assert store.dataset_size(meta) == (1, 2.0)  # deleted by hand

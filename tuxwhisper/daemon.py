@@ -15,9 +15,12 @@ import unicodedata
 import wave
 
 from tuxwhisper import desktop, engine, llm, store
+from tuxwhisper.client import request, send, sock_path  # noqa: F401 - re-exported for menu and tests
 
 # Clipping: samples at full scale, as when speaking too close to the mic or with the gain too high.
 CLIP_LEVEL, CLIP_SHARE, CLIP_WARN_EVERY = 0.99, 0.001, 600  # level, share of samples, seconds
+RETRY_MAX_SECONDS = 30  # whispered takes longer than this aren't retried without the voice filter
+HINT_EVERY = 300  # seconds between lookups of the settings key shown under "Recording…"
 
 
 class Dictation:
@@ -60,17 +63,20 @@ class Dictation:
         self.kbd = kbd
         self.last_memory_notice = 0.0
         self.lock = threading.Lock()
+        self.press_lock = threading.Lock()  # presses come from one thread per connection
         # Takes are transcribed and pasted one at a time, in the order they stopped.
         self.turn = threading.Condition()
         self.next_ticket = self.serving = 0
         self.stream = None
         self.indicator = None  # ID of the on-screen recording notification
         self.hint = None  # the settings key shown under "Recording…"; see refresh_hint()
+        self.last_hint = -HINT_EVERY
         self.last_clip_warning = -CLIP_WARN_EVERY
         self.chunks = []
         self.last_press = 0.0
         self.last_used = time.monotonic()
         self.model_lock = threading.Lock()  # held while the speech model is used, loaded or freed
+        self.last_lang = "en"  # the last take's language: the guess for the next one's prompt
         self.last_take = None  # (audio, text) of the latest transcription
         self.take_id = 0  # counts takes, so a cancelled save can tell whether a newer one came
         self.last_save = 0.0
@@ -83,13 +89,14 @@ class Dictation:
     RELEASE_TAIL = 0.15   # audio kept after the last repeat (release is within ~0.11s of it)
 
     def press(self, rewrite=False):
-        now = time.monotonic()
-        is_repeat = now - self.last_press < self.REPEAT_WINDOW
-        self.last_press = now
-        if is_repeat:
-            self.held = self.stream is not None
-            return
-        self.held = False
+        with self.press_lock:  # two presses at once must not both count as the first
+            now = time.monotonic()
+            is_repeat = now - self.last_press < self.REPEAT_WINDOW
+            self.last_press = now
+            if is_repeat:
+                self.held = self.stream is not None
+                return
+            self.held = False
         threading.Thread(target=self.toggle, kwargs={"rewrite": rewrite}, daemon=True).start()
 
     def _watch_release(self):
@@ -184,8 +191,11 @@ class Dictation:
         self.chunks = []
         self.rewrite = rewrite  # mode is set by the key that started the take
         if rewrite:  # a cold load takes seconds; overlap it with the speech
-            self.warming = threading.Thread(target=llm.warm_rewrite_model, daemon=True)
-            self.warming.start()
+            # (thread, result): the cleanup skips its own GPU check when the warm-up confirmed it.
+            result = []
+            thread = threading.Thread(target=lambda: result.append(llm.warm_rewrite_model()), daemon=True)
+            thread.start()
+            self.warming = (thread, result)
         desktop.sound("device-added")  # 0.2 s; over before the mic finishes opening
         try:
             stream = self.sd.InputStream(
@@ -243,8 +253,11 @@ class Dictation:
             return
         chunks, excess, rewrite, warming, ticket, indicator = take
         # Swap "Recording…" for "Transcribing…" in place: one notification, not a new popup.
-        # Shown outside self.lock, which notify-send -p would hold up.
-        status = [desktop.notify("Transcribing…", persistent=True, icon=MIC_ICON, replace=indicator)]
+        # Shown in the background: notify-send -p takes a while, and the take needn't wait.
+        status = Status()
+        status.thread = threading.Thread(target=lambda: status.append(desktop.notify(
+            "Transcribing…", persistent=True, icon=MIC_ICON, replace=indicator)), daemon=True)
+        status.thread.start()
         try:
             with self.turn:
                 self.turn.wait_for(lambda: self.serving == ticket)
@@ -263,24 +276,38 @@ class Dictation:
     def transcribe(self, audio):
         """The take's (text, language) (under self.model_lock), with whispered takes retried
         without the voice filter."""
-        lang = store.settings()["language"] or self.model.detect_language(audio, vad_filter=True)[0]
+        lang = store.settings()["language"] or None  # "" is automatic
         # The English prompt and vocabulary make Whisper translate other languages into English.
-        english = lang == "en"
-        segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=True,
-                                            initial_prompt=engine.PROMPT if english else None,
-                                            hotwords=store.vocab() if english else None)
+        # With no language set, guess the prompt from the last take's language and let Whisper
+        # detect it in the same pass: one transcription instead of a detection and then one.
+        english = (lang or self.last_lang) == "en"
+        segments, info = self._transcribe(audio, lang, english, vad_filter=True)
+        if not lang:
+            lang = getattr(info, "language", None)
+            if lang is None:  # a model that doesn't report it: detect, as a separate pass
+                lang = self.model.detect_language(audio, vad_filter=True)[0]
+            if (lang == "en") != english:  # guessed the wrong prompt: redo with the right one
+                english = lang == "en"
+                segments, _ = self._transcribe(audio, lang, english, vad_filter=True)
+            self.last_lang = lang
         text = " ".join(s.text.strip() for s in segments).strip()
-        if not text and engine.sound_seconds(audio, store.RATE) >= engine.MIN_SOUND:
+        if (not text and engine.sound_seconds(audio, store.RATE) >= engine.MIN_SOUND
+                and len(audio) <= RETRY_MAX_SECONDS * store.RATE):
             # The filter heard no voice in a take with sound: likely whispered. Try without
             # it, keeping the result only if it fits the sound (Whisper may invent a phrase).
-            segments, _ = self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=False,
-                                                initial_prompt=engine.PROMPT if english else None,
-                                                hotwords=store.vocab() if english else None)
+            # Not for long takes: a whispered one is short, and a long retry would cost seconds.
+            segments, _ = self._transcribe(audio, lang, english, vad_filter=False)
             retry = " ".join(s.text.strip() for s in segments).strip()
             ok = engine.plausible(retry, audio, store.RATE)
             print(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})", flush=True)
             text = retry if ok else ""
         return text, lang
+
+    def _transcribe(self, audio, lang, english, vad_filter):
+        """(segments, info) from the model; lang None detects the language."""
+        return self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=vad_filter,
+                                     initial_prompt=engine.PROMPT if english else None,
+                                     hotwords=store.vocab() if english else None)
 
     def process(self, chunks, excess, rewrite, warming, status=None):
         """Transcribe one take, clean it up if asked, and paste it. status holds the take's
@@ -290,6 +317,8 @@ class Dictation:
             audio = audio[:-excess]
         if len(audio) < store.RATE * 0.3:  # too short to be speech; Whisper hallucinates on these
             return
+        # Read the clipboard to restore after the paste while the take transcribes.
+        snapshot = self.snapshot_clipboard() if self.kbd is not None else None
         if not self.ensure_model():
             return
         with self.model_lock:
@@ -337,26 +366,33 @@ class Dictation:
             # of "Transcribing…": the same notification, so nothing flashes up and away.
             status = status if status is not None else []
             def cleaning():
+                wait_shown(status)
                 nid = desktop.notify(f"Cleaning up ({llm.current_mode()})…", persistent=True,
                                      icon=MIC_ICON, replace=status[0] if status else None)
                 status[:] = [nid]
             timer = threading.Timer(0.8, cleaning)
             timer.start()
+            on_gpu = None  # not known: llm_cleanup checks
             if warming:
-                warming.join()
-            text = llm.llm_cleanup(text, lang)
+                thread, result = warming
+                thread.join()
+                on_gpu = True if result == [True] else None  # a failed warm-up is checked again
+            text = llm.llm_cleanup(text, lang, on_gpu=on_gpu)
             timer.cancel()
             timer.join()
             print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
         text = store.apply_replacements(text)
         end_status(status)
-        typed = self.paste(text + " ")
+        typed = self.paste(text + " ", snapshot)
         take[2] = store.add_history(text, rewritten=rewrite, typed=typed)  # only a typed take can be retyped
         self.warn_if_clipped(audio)
-        threading.Thread(target=self.refresh_hint, daemon=True).start()  # in case the key changed
+        if time.monotonic() - self.last_hint > HINT_EVERY:  # in case the key changed; not every take
+            self.last_hint = time.monotonic()
+            threading.Thread(target=self.refresh_hint, daemon=True).start()
 
     def refresh_hint(self):
         """The settings key, shown under "Recording…"; looked up off the hot path (about 50 ms)."""
+        self.last_hint = time.monotonic()
         key = desktop.settings_shortcut()
         self.hint = f"<i>⚙ {key}</i>" if key else None  # GNOME allows only b/i/u markup
 
@@ -424,13 +460,17 @@ class Dictation:
             w.setframerate(store.RATE)
             w.writeframes((self.np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes())
         meta = os.path.join(store.RECORDINGS, "metadata.csv")
-        new = not os.path.exists(meta)
-        with store.file_lock(meta), open(meta, "a", newline="") as f:
-            out = csv.writer(f)
-            if new:
-                out.writerow(["file_name", "transcription"])
-            out.writerow([name, text])
-        takes, seconds = store.dataset_size(meta)
+        with store.file_lock(meta):
+            new = not os.path.exists(meta)
+            takes, frames = (0, 0) if new else store.dataset_frames(meta)  # before this take's row
+            with open(meta, "a", newline="") as f:
+                out = csv.writer(f)
+                if new:
+                    out.writerow(["file_name", "transcription"])
+                out.writerow([name, text])
+            takes, frames = takes + 1, frames + len(audio)
+            store.save_dataset_size(meta, takes, frames)
+        seconds = frames / store.RATE
         total = f"{seconds / 60:.0f} min" if seconds >= 60 else f"{seconds:.0f} s"
         if entry:
             store.update_history_entry(entry, recording=name)
@@ -449,23 +489,38 @@ class Dictation:
             os.remove(store.retype_path())
         except (OSError, ValueError, TypeError):
             return False
-        # Mid-take, the text before the cursor may not be the one to correct.
-        if self.kbd is None or self.stream is not None or self.next_ticket != self.serving:
-            return False
-        time.sleep(0.4)  # the correction dialog just closed; let focus return to the app
-        k, ec = self.kbd, self.ec
-        for _ in range(job["delete"]):
-            for val in (1, 0):
-                k.write(ec.EV_KEY, ec.KEY_BACKSPACE, val)
-                k.syn()
-            time.sleep(0.004)
-        return self.paste(job["text"] + " ")
+        with self.lock:
+            # Mid-take, the text before the cursor may not be the one to correct.
+            if self.kbd is None or self.stream is not None or self.next_ticket != self.serving:
+                return False
+            # Take a turn like a take: one stopped meanwhile pastes after this, not amid it.
+            self.next_ticket += 1
+        try:
+            time.sleep(0.4)  # the correction dialog just closed; let focus return to the app
+            k, ec = self.kbd, self.ec
+            for _ in range(job["delete"]):
+                for val in (1, 0):
+                    k.write(ec.EV_KEY, ec.KEY_BACKSPACE, val)
+                    k.syn()
+                time.sleep(0.004)
+            return self.paste(job["text"] + " ")
+        finally:
+            with self.turn:
+                self.serving += 1
+                self.turn.notify_all()
 
-    def paste(self, text):
-        """Type text at the cursor; True if it was typed, False if it was only copied (or not even that)."""
+    def snapshot_clipboard(self):
+        """Start reading the selections the paste key overwrites; paste() takes the result."""
+        selections = paste_selections(store.settings()["paste_key"])
+        saved = {}
+        thread = threading.Thread(target=lambda: saved.update(read_selections(selections)), daemon=True)
+        thread.start()
+        return thread, saved
+
+    def paste(self, text, snapshot=None):
+        """Type text at the cursor; True if it was typed, False if it was only copied (or not even that).
+        snapshot is snapshot_clipboard()'s, taken before the take was transcribed."""
         # Clipboard + a paste shortcut handles any Unicode and works on X11 and Wayland.
-        # Some apps (e.g. terminals) paste the primary selection on Shift+Insert, so set both;
-        # the Ctrl shortcuts always paste the clipboard.
         if self.kbd is None:
             if desktop.clipboard_set(text):
                 desktop.notify("Copied", body="Paste it with Ctrl+V.")
@@ -474,9 +529,15 @@ class Dictation:
             return False
         paste_key = store.settings()["paste_key"]
         keys = [getattr(self.ec, k) for k in store.PASTE_KEYS[paste_key]]
-        selections = ("clipboard", "primary") if paste_key == "shift+insert" else ("clipboard",)
-        saved = {sel: desktop.clipboard_get(sel) for sel in selections}
-        if not all(desktop.clipboard_set(text, sel) for sel in saved):  # pasting now would paste old text
+        selections = paste_selections(paste_key)
+        saved = {}
+        if snapshot:
+            thread, saved = snapshot
+            thread.join()
+        # The paste key may have changed since the snapshot: read what it didn't.
+        saved.update(read_selections([sel for sel in selections if sel not in saved]))
+        saved = {sel: saved[sel] for sel in selections}
+        if not all(write_selections({sel: text for sel in saved}).values()):  # pasting now would paste old text
             desktop.notify(*COPY_FAILED, level="error")
             return False
         time.sleep(0.05)
@@ -487,9 +548,7 @@ class Dictation:
             k.syn()
             time.sleep(0.01)
         time.sleep(0.3)  # the app fetches the clipboard asynchronously after the paste
-        for sel, old in saved.items():
-            if old is not None:
-                desktop.clipboard_set(old, sel)
+        write_selections({sel: old for sel, old in saved.items() if old is not None})
         return True
 
 
@@ -497,10 +556,48 @@ COPY_FAILED = ("Couldn't copy the transcript", "Find it under Recent transcripts
 MIC_ICON = "audio-input-microphone"
 
 
+class Status(list):
+    """A take's "Transcribing…" notification ID (one item once shown), and the thread showing it."""
+    thread = None
+
+
+def wait_shown(status):
+    """Wait until the take's "Transcribing…" is shown, so it can be replaced or closed."""
+    if getattr(status, "thread", None) is not None:
+        status.thread.join()
+
+
 def end_status(status):
     """Close a take's "Transcribing…" notification, once: status is a one-item list."""
+    wait_shown(status)
     if status:
         desktop.close_notification(status.pop())
+
+
+def paste_selections(paste_key):
+    """The selections a paste key pastes from. Some apps (e.g. terminals) paste the primary
+    selection on Shift+Insert, so set both; the Ctrl shortcuts always paste the clipboard."""
+    return ("clipboard", "primary") if paste_key == "shift+insert" else ("clipboard",)
+
+
+def in_parallel(fn, items):
+    """{item: fn(item)}, each call in its own thread: the clipboard tools take tens of ms each."""
+    out = {}
+    threads = [threading.Thread(target=lambda i=i: out.__setitem__(i, fn(i)), daemon=True) for i in items]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return out
+
+
+def read_selections(selections):
+    return in_parallel(desktop.clipboard_get, selections)
+
+
+def write_selections(texts):
+    """Set each selection to its text; {selection: True if it was set}."""
+    return in_parallel(lambda sel: desktop.clipboard_set(texts[sel], sel), texts)
 
 
 
@@ -540,16 +637,6 @@ def repeat_window():
 
 
 
-def sock_path():
-    # XDG_RUNTIME_DIR is private to the user (0700); a shared fallback like /tmp would let
-    # other local users reach the socket, so refuse to run without it.
-    runtime = os.environ.get("XDG_RUNTIME_DIR")
-    if not runtime:  # an OSError, so callers such as request() handle it instead of exiting
-        desktop.notify("TuxWhisper needs a desktop session", body="XDG_RUNTIME_DIR is not set.", level="error")
-        raise OSError("XDG_RUNTIME_DIR is not set; run this from a desktop session")
-    return os.path.join(runtime, f"{store.APP}.sock")
-
-
 def daemon_running(sock):
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
@@ -580,60 +667,33 @@ def serve():
     srv.listen()
     while True:
         conn, _ = srv.accept()
-        try:
-            with conn:
-                conn.settimeout(2)
-                cmd = conn.recv(64).decode(errors="replace").strip()
-                if cmd == "retype":  # the caller waits, so its next dialog can't steal the focus
-                    conn.settimeout(None)
-                    conn.sendall(b"ok" if d.retype() else b"no")
-                    continue
-            if cmd == "toggle":
-                d.press()
-            elif cmd == "rewrite":
-                d.press(rewrite=True)
-            elif cmd == "save":
-                d.save()
-        except Exception:  # noqa: BLE001 - one failed command must not stop dictation
-            traceback.print_exc()
-            desktop.notify("TuxWhisper command failed", body="See the log: journalctl --user -u tuxwhisper",
-                           level="error")
+        # Each in its own thread: a client that sends nothing, or a long retype, must not
+        # hold up the next key press.
+        threading.Thread(target=handle, args=(d, conn), daemon=True).start()
 
 
-
-def request(cmd, timeout=60):
-    """Send cmd to the daemon and wait for its reply; None if it isn't running."""
+def handle(d, conn):
+    """Run one connection's command."""
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(timeout)
-            s.connect(sock_path())
-            s.sendall(cmd.encode())
-            s.shutdown(socket.SHUT_WR)
-            return s.recv(16).decode()
-    except OSError:
-        return None
+        with conn:
+            conn.settimeout(2)
+            cmd = conn.recv(64).decode(errors="replace").strip()
+            if cmd == "retype":  # the caller waits, so its next dialog can't steal the focus
+                conn.settimeout(None)
+                conn.sendall(b"ok" if d.retype() else b"no")
+                return
+        if cmd == "toggle":
+            d.press()
+        elif cmd == "rewrite":
+            d.press(rewrite=True)
+        elif cmd == "save":
+            d.save()
+    except Exception:  # noqa: BLE001 - one failed command must not stop dictation
+        traceback.print_exc()
+        desktop.notify("TuxWhisper command failed", body="See the log: journalctl --user -u tuxwhisper",
+                       level="error")
 
 
 def typed_length(text):
     """How many BackSpaces erase text: one per character, not per combining accent."""
     return sum(1 for c in text if not unicodedata.combining(c))
-
-
-def send(cmd):
-    """Send a key's command to the daemon; it answers by closing the connection."""
-    if request(cmd, timeout=5) is None:
-        state = subprocess.run(["systemctl", "--user", "is-active", store.APP],
-                               capture_output=True, text=True).stdout.strip()
-        if state in ("active", "activating"):  # loading its model: the socket isn't up yet
-            desktop.notify("TuxWhisper is still starting", body="Try again in a few seconds.", level="warn")
-            sys.exit(1)
-        # Not running, e.g. systemd gave up after repeated start failures: start it again
-        # rather than leave the key doing nothing.
-        subprocess.run(["systemctl", "--user", "reset-failed", store.APP], capture_output=True)
-        started = subprocess.run(["systemctl", "--user", "start", "--no-block", store.APP],
-                                 capture_output=True).returncode == 0
-        desktop.notify("Starting TuxWhisper…" if started else f"{store.APP} isn't running",
-                       body="Try again in about 15 seconds." if started
-                       else "Start it with: systemctl --user start tuxwhisper",
-                       level="info" if started else "error")
-        sys.exit(1)

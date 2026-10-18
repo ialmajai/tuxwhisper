@@ -46,9 +46,10 @@ MODES = {
 }
 
 
-# num_ctx: dictations are short. num_gpu: all layers on the GPU, so a full GPU fails fast with
+# num_ctx: the smaller of CONTEXT_SIZES, which holds a normal to long take, so warming up
+# loads the model with the context the cleanup uses (a change makes Ollama reload it). num_gpu: all layers on the GPU, so a full GPU fails fast with
 # "out of memory" instead of Ollama slowly trying CPU/GPU splits (30 s+ on a busy GPU).
-OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": 1024, "num_gpu": 999}
+OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": 4096, "num_gpu": 999}
 
 
 def ollama(path, payload=None, timeout=30):
@@ -90,11 +91,13 @@ def rewrite_model_on_gpu():
 
 
 def warm_rewrite_model():
-    """Load the cleanup model while the user speaks; llm_cleanup reports any failure."""
+    """Load the cleanup model while the user speaks; rewrite_model_on_gpu()'s answer, or None
+    if it failed (llm_cleanup retries and reports it)."""
     try:
-        rewrite_model_on_gpu()
+        return rewrite_model_on_gpu()
     except Exception as e:  # noqa: BLE001 - llm_cleanup retries and tells the user
         print(f"rewrite model preload failed: {e}", flush=True)
+        return None
 
 
 def modes():
@@ -129,7 +132,7 @@ def rewrite_task(text):
 
 
 # Context sizes F3 picks from: a few fixed ones, since Ollama reloads the model when it changes.
-CONTEXT_SIZES = (1024, 4096, 8192)
+CONTEXT_SIZES = (4096, 8192)
 
 
 def context_size(system, text):
@@ -140,10 +143,11 @@ def context_size(system, text):
     return next((n for n in CONTEXT_SIZES if n >= need), None)
 
 
-def llm_cleanup(text, lang):
-    """LLM-cleaned transcript, or the original text if Ollama fails or lacks GPU memory."""
+def llm_cleanup(text, lang, on_gpu=None):
+    """LLM-cleaned transcript, or the original text if Ollama fails or lacks GPU memory.
+    on_gpu: True when the warm-up just confirmed the model is on the GPU; None checks."""
     try:
-        if not rewrite_model_on_gpu():
+        if not (on_gpu or rewrite_model_on_gpu()):
             print("rewrite skipped: model doesn't fit in GPU memory", flush=True)
             desktop.notify("Not enough GPU memory for LLM cleanup; pasted the plain transcript", level="warn")
             return text
