@@ -369,6 +369,7 @@ class ModelManager:
         self.lock = threading.Lock()  # held while the speech model is used, loaded or freed
         self.last_memory_notice = 0.0
         self.last_lang = "en"  # the last take's language: the guess for the next one's prompt
+        self.last_used = time.monotonic()  # when a take last started or was transcribed
 
     @classmethod
     def load(cls) -> "ModelManager":
@@ -428,9 +429,15 @@ class ModelManager:
             finally:
                 self.lock.release()
 
-    def unload_if_idle(self, minutes: int, idle: float) -> None:
-        """Free the model's GPU memory when it's been idle (seconds) over minutes; 0 = never."""
-        if (minutes and DEVICE != "cpu" and idle > minutes * 60
+    def touch(self) -> None:
+        """Note the model was just used, or is about to be: it isn't idle."""
+        self.last_used = time.monotonic()
+
+    def unload_if_idle(self, minutes: int, idle: bool) -> None:
+        """Free the model's GPU memory once unused for minutes (0 = never); idle: nothing is
+        being recorded."""
+        if (minutes and DEVICE != "cpu" and idle
+                and time.monotonic() - self.last_used > minutes * 60
                 and self.lock.acquire(blocking=False)):  # not while one is transcribing
             try:
                 if self.model is not None and self.model.loaded():

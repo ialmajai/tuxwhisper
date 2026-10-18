@@ -45,7 +45,7 @@ menu.
 <summary><b>It pastes my old clipboard instead of the transcript</b></summary>
 
 The app read the clipboard after TuxWhisper had restored it. Increase the `0.3` s delay in
-`paste()` in `tuxwhisper/daemon.py`.
+`paste()` in `tuxwhisper/pipeline.py`.
 </details>
 
 <details>

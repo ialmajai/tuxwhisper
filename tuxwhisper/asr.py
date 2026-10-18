@@ -64,8 +64,8 @@ def main():
         migrate_old_files()
     if cmd == "serve":
         add_library_path()
-        from tuxwhisper import daemon
-        daemon.serve()
+        from tuxwhisper import server
+        server.serve()
     elif cmd in ("toggle", "rewrite", "save"):  # every key press: import only the socket client
         from tuxwhisper import client
         client.send(cmd)

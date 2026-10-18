@@ -12,7 +12,18 @@ import types
 import numpy as np
 import pytest
 
-from tuxwhisper import client, daemon, desktop, engine, llm, menu, store
+from tuxwhisper import (
+    client,
+    daemon,
+    desktop,
+    engine,
+    llm,
+    menu,
+    pipeline,
+    recordings,
+    server,
+    store,
+)
 
 real_add_history = store.add_history  # the fixture below stubs it out for the dictation tests
 real_notify = desktop.notify
@@ -181,7 +192,7 @@ class FakeModel:
 def make_dictation(monkeypatch):
     d = daemon.Dictation(engine.ModelManager(FakeModel()), types.SimpleNamespace(InputStream=FakeStream), kbd=None, ec=None)
     d.pasted = []
-    d.paste = lambda text, snapshot=None: d.pasted.append(text.strip()) or True
+    d.paster.paste = lambda text, snapshot=None: d.pasted.append(text.strip()) or True
     d.refresh_hint = lambda: None
     monkeypatch.setattr(llm, "warm_rewrite_model", lambda: None)
     monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None: f"CLEANED:{text}")
@@ -231,7 +242,7 @@ class InlineThread:
 def save_with_answer(monkeypatch, d, answer):
     """Press the save key; the confirmation dialog returns answer (None = Cancel)."""
     shown = []
-    monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
+    monkeypatch.setattr(recordings, "threading", types.SimpleNamespace(Thread=InlineThread))
     monkeypatch.setattr(desktop, "edit_text", lambda text, title, ok, explain=None: shown.append(text) or answer)
     d.save()
     return shown
@@ -244,7 +255,7 @@ def saved_rows():
 
 def test_saved_recordings_are_private(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
+    d.recordings.last_take = recordings.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
     save_with_answer(monkeypatch, d, "hello")
     mode = stat.S_IMODE(os.stat(store.RECORDINGS).st_mode)
     assert mode == 0o700
@@ -252,7 +263,7 @@ def test_saved_recordings_are_private(monkeypatch):
 
 def test_save_asks_first_and_keeps_the_fixed_transcript(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "send it to jon")
+    d.recordings.last_take = recordings.Take(np.zeros(store.RATE, dtype=np.float32), "send it to jon")
     shown = save_with_answer(monkeypatch, d, "send it to John")
     assert shown == ["send it to jon"]
     assert [r.split(",", 1)[1] for r in saved_rows()] == ["send it to John"]
@@ -260,23 +271,23 @@ def test_save_asks_first_and_keeps_the_fixed_transcript(monkeypatch):
 
 def test_save_dialog_that_fails_is_reported_and_the_take_kept(monkeypatch):
     d = make_dictation(monkeypatch)
-    take = d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
-    monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
+    take = d.recordings.last_take = recordings.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
+    monkeypatch.setattr(recordings, "threading", types.SimpleNamespace(Thread=InlineThread))
     def missing(*a):
         raise RuntimeError("zenity isn't installed")
     monkeypatch.setattr(desktop, "edit_text", missing)
     d.save()
-    assert notified == ["Couldn't open the save dialog"] and d.last_take is take
+    assert notified == ["Couldn't open the save dialog"] and d.recordings.last_take is take
 
 
 def test_save_that_fails_to_write_is_reported_and_the_take_kept(monkeypatch):
     d = make_dictation(monkeypatch)
-    take = d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
+    take = d.recordings.last_take = recordings.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
     def full(*a):
         raise OSError("No space left on device")
-    d.write_recording = full
+    d.recordings.write_recording = full
     save_with_answer(monkeypatch, d, "hello")
-    assert notified == ["Couldn't save the recording"] and d.last_take is take
+    assert notified == ["Couldn't save the recording"] and d.recordings.last_take is take
 
 
 @pytest.mark.parametrize("err, body", [
@@ -284,21 +295,21 @@ def test_save_that_fails_to_write_is_reported_and_the_take_kept(monkeypatch):
     (PermissionError(13, "Permission denied"), "No permission to write to {}."),
     (ValueError("odd"), "odd")])
 def test_save_errors_are_said_plainly(err, body):
-    assert daemon.write_error(err) == body.format(store.RECORDINGS)
+    assert recordings.write_error(err) == body.format(store.RECORDINGS)
 
 
 def test_cancelled_save_does_not_bring_back_an_older_take(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "old")
-    monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
+    d.recordings.last_take = recordings.Take(np.zeros(store.RATE, dtype=np.float32), "old")
+    monkeypatch.setattr(recordings, "threading", types.SimpleNamespace(Thread=InlineThread))
     def dialog(text, title, ok, explain=None):
         # While it's open, a newer take is dictated and the save key takes it for its own dialog.
-        d.takes += 1
-        d.last_take = None
+        d.recordings.takes += 1
+        d.recordings.last_take = None
         # ... and then this one is cancelled (returns None)
     monkeypatch.setattr(desktop, "edit_text", dialog)
     d.save()
-    assert d.last_take is None
+    assert d.recordings.last_take is None
 
 
 @pytest.mark.parametrize("code, result", [(0, "text"), (1, None), (252, None), (5, RuntimeError)])
@@ -337,11 +348,11 @@ def test_edit_text_drafts_are_private_unique_and_removed(monkeypatch, tmp_path):
 
 def test_cancelled_save_writes_nothing_and_can_be_asked_again(monkeypatch):
     d = make_dictation(monkeypatch)
-    take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
-    d.last_take = take
+    take = recordings.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
+    d.recordings.last_take = take
     save_with_answer(monkeypatch, d, None)
     assert not os.path.exists(store.RECORDINGS)
-    assert d.last_take is take  # the save key offers it again
+    assert d.recordings.last_take is take  # the save key offers it again
 
 
 # --- clipboard ------------------------------------------------------------------------------
@@ -383,7 +394,7 @@ def test_speech_model_unloads_when_idle_and_reloads_on_use(monkeypatch):
     d = make_dictation(monkeypatch)
     d.unload_if_idle()
     assert d.models.model.loaded()                   # used just now: stays loaded
-    d.last_used -= 6 * 60
+    d.models.last_used -= 6 * 60
     d.unload_if_idle()
     assert not d.models.model.loaded()               # 6 min idle: freed
     d.toggle()                                # the next take reloads it before transcribing
@@ -393,7 +404,7 @@ def test_speech_model_unloads_when_idle_and_reloads_on_use(monkeypatch):
 
 def test_speech_model_kept_when_never_or_cpu(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.last_used -= 120 * 60
+    d.models.last_used -= 120 * 60
     monkeypatch.setattr(engine, "DEVICE", "cuda")
     with open(store.CONFIG, "w") as f:
         f.write("asr_unload_minutes = 0\n")    # never
@@ -411,7 +422,7 @@ def test_no_unload_while_transcribing(monkeypatch):
     with open(store.CONFIG, "w") as f:
         f.write("asr_unload_minutes = 5\n")
     d = make_dictation(monkeypatch)
-    d.last_used -= 6 * 60
+    d.models.last_used -= 6 * 60
     with d.models.lock:                        # a take is being transcribed
         d.unload_if_idle()
     assert d.models.model.loaded()
@@ -644,12 +655,12 @@ def test_retype_erases_the_dictation_and_pastes_the_fix(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
     d = make_dictation(monkeypatch)
-    d.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
-    d.kbd = FakeKeyboard()
+    d.paster.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
+    d.paster.kbd = FakeKeyboard()
     with open(store.retype_path(), "w") as f:
         f.write('{"delete": 6, "text": "Hello"}')
     assert d.retype()
-    assert d.kbd.keys == [14] * 6 and d.pasted == ["Hello"]
+    assert d.paster.kbd.keys == [14] * 6 and d.pasted == ["Hello"]
     assert not os.path.exists(store.retype_path())
 
 
@@ -764,18 +775,18 @@ def test_correct_last_button_says_what_it_will_do(monkeypatch, typed, age, label
 def test_retype_refuses_while_a_take_is_in_flight(monkeypatch):
     monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
     d = make_dictation(monkeypatch)
-    d.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
-    d.kbd = FakeKeyboard()
+    d.paster.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
+    d.paster.kbd = FakeKeyboard()
     d.next_ticket = 1  # a take stopped but isn't pasted yet
     with open(store.retype_path(), "w") as f:
         f.write('{"delete": 6, "text": "Hello"}')
-    assert not d.retype() and d.kbd.keys == []
+    assert not d.retype() and d.paster.kbd.keys == []
 
 
 def test_history_records_whether_the_take_was_typed(monkeypatch):
     d = make_dictation(monkeypatch)
     monkeypatch.setattr(store, "add_history", real_add_history)
-    d.paste = lambda text, snapshot=None: False  # e.g. the clipboard couldn't be set
+    d.paster.paste = lambda text, snapshot=None: False  # e.g. the clipboard couldn't be set
     d.toggle()
     d.toggle()
     assert store.load_history()[-1]["typed"] is False
@@ -979,7 +990,7 @@ def test_download_verified_refuses_a_wrong_checksum(monkeypatch, tmp_path):
     (6.0, "Yes.", None),                                 # short takes can be short
 ])
 def test_missed_speech(seconds, text, title):
-    missed = daemon.missed_speech(seconds, text)
+    missed = pipeline.missed_speech(seconds, text)
     assert (missed[0] if missed else None) == title
 
 
@@ -1085,7 +1096,7 @@ class WhisperedModel(FakeModel):
 def test_whispered_take_is_retried_without_the_voice_filter(monkeypatch, heard, sound, typed):
     d = make_dictation(monkeypatch)
     d.models.model = WhisperedModel(heard)
-    d.process([burst(sound)[:, None]], 0, False, None)
+    d.pipeline.run(pipeline.TakeContext([burst(sound)[:, None]]))
     assert d.pasted == typed
     assert ("Didn't catch that" in notified) is (not typed)
 
@@ -1093,7 +1104,7 @@ def test_whispered_take_is_retried_without_the_voice_filter(monkeypatch, heard, 
 def test_silence_is_not_retried(monkeypatch):
     d = make_dictation(monkeypatch)
     d.models.model = WhisperedModel("You")
-    d.process([np.zeros((4 * 16000, 1), dtype=np.float32)], 0, False, None)
+    d.pipeline.run(pipeline.TakeContext([np.zeros((4 * 16000, 1), dtype=np.float32)]))
     assert d.pasted == [] and "Didn't catch that" in notified
 
 
@@ -1227,7 +1238,7 @@ def test_long_take_is_not_retried_without_the_voice_filter(monkeypatch):
     d = make_dictation(monkeypatch)
     d.models.model = WhisperedModel("Yes.")
     audio = np.concatenate([burst(0.4), np.zeros(28 * store.RATE, dtype=np.float32)])
-    d.process([audio[:, None]], 0, False, None)
+    d.pipeline.run(pipeline.TakeContext([audio[:, None]]))
     assert d.pasted == []
 
 
@@ -1249,17 +1260,17 @@ def test_transcribing_notice_does_not_hold_up_the_take(monkeypatch):
 def test_paste_restores_the_clipboard_read_during_transcription(monkeypatch):
     monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
     d = make_dictation(monkeypatch)
-    del d.paste  # the real one
-    d.ec = types.SimpleNamespace(EV_KEY=1, KEY_LEFTCTRL=29, KEY_V=47, KEY_LEFTSHIFT=42, KEY_INSERT=110)
-    d.kbd = FakeKeyboard()
+    del d.paster.paste  # the real one
+    d.paster.ec = types.SimpleNamespace(EV_KEY=1, KEY_LEFTCTRL=29, KEY_V=47, KEY_LEFTSHIFT=42, KEY_INSERT=110)
+    d.paster.kbd = FakeKeyboard()
     board = {"clipboard": "old", "primary": "old primary"}
     monkeypatch.setattr(desktop, "clipboard_get", lambda sel="clipboard": board[sel])
     sets = []
     monkeypatch.setattr(desktop, "clipboard_set", lambda text, sel="clipboard": sets.append((sel, text)) or True)
     store.save_settings({"paste_key": "ctrl+v"})
-    snapshot = d.snapshot_clipboard()
+    snapshot = d.paster.snapshot_clipboard()
     store.save_settings({"paste_key": "shift+insert"})  # changed mid-take: primary is read at paste
-    assert d.paste("hi ", snapshot)
+    assert d.paster.paste("hi ", snapshot)
     assert sorted(sets) == sorted([("clipboard", "hi "), ("primary", "hi "),
                                    ("clipboard", "old"), ("primary", "old primary")])
     assert sets.index(("clipboard", "old")) > sets.index(("clipboard", "hi "))
@@ -1303,14 +1314,14 @@ def test_connection_command_runs(monkeypatch):
     a, b = socket.socketpair()
     b.sendall(b"rewrite")
     b.shutdown(socket.SHUT_WR)
-    daemon.handle(d, a)
+    server.handle(d, a)
     assert d.presses == [True]
 
 
 def test_take_stopped_during_a_retype_pastes_after_it(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
-    d.kbd = FakeKeyboard()
+    d.paster.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
+    d.paster.kbd = FakeKeyboard()
     order = []
     typing = threading.Event()
     def paste(text, snapshot=None):
@@ -1319,7 +1330,7 @@ def test_take_stopped_during_a_retype_pastes_after_it(monkeypatch):
             time.sleep(0.2)
         order.append(text.strip())
         return True
-    d.paste = paste
+    d.paster.paste = paste
     with open(store.retype_path(), "w") as f:
         f.write('{"delete": 1, "text": "Hello"}')
     retyping = threading.Thread(target=d.retype)
@@ -1337,14 +1348,14 @@ def test_settings_key_is_looked_up_at_most_every_few_minutes(monkeypatch):
     d.refresh_hint = lambda: looked.append(1)
     monkeypatch.setattr(daemon.threading, "Thread", InlineThread)
     for _ in range(3):
-        d.process([burst(1)[:, None]], 0, False, None)
+        d.pipeline.run(pipeline.TakeContext([burst(1)[:, None]]))
     assert looked == [1]
 
 
 def test_dataset_size_is_cached_and_notices_changes(monkeypatch):
     d = make_dictation(monkeypatch)
     for seconds in (1, 2):
-        d.write_recording(np.zeros(seconds * store.RATE, dtype=np.float32), "hi", None)
+        d.recordings.write_recording(np.zeros(seconds * store.RATE, dtype=np.float32), "hi", None)
         time.sleep(1.1)  # recordings are named by the second
     meta = os.path.join(store.RECORDINGS, "metadata.csv")
     assert os.path.exists(os.path.join(store.RECORDINGS, store.SIZE_CACHE))
