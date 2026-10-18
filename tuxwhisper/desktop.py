@@ -18,7 +18,8 @@ NOTIFY_TIMEOUTS = {"info": 1500, "info+body": 6000, "warn": 8000, "error": 8000}
 NOTIFY_ICONS = {"warn": "dialog-warning", "error": "dialog-error"}
 
 
-def notify(msg, persistent=False, body=None, level="info", icon=None, replace=None):
+def notify(msg: str, persistent: bool = False, body: str | None = None, level: str = "info",
+           icon: str | None = None, replace: str | None = None) -> str | None:
     """Show a desktop notification; level is "info", "warn" or "error". persistent=True keeps
     it on screen until close_notification() is called with the returned ID; replace=<ID>
     swaps the text of that one in place, so a status changes without a new popup."""
@@ -44,12 +45,12 @@ def notify(msg, persistent=False, body=None, level="info", icon=None, replace=No
     return None
 
 
-def plural(n, one, many):
+def plural(n: int, one: str, many: str) -> str:
     """"1 recording", "3 recordings"."""
     return f"{n} {one if n == 1 else many}"
 
 
-def settings_shortcut():
+def settings_shortcut() -> str | None:
     """The GNOME shortcut bound to the settings command, e.g. "Alt+F9", or None."""
     ours = our_shortcut(gnome_shortcuts() or {}, "settings")
     return key_label(ours[1]) if ours else None
@@ -64,14 +65,14 @@ KEY_SUGGESTIONS = ["F5", "F3", "F4", "F6", "F7", "F8", "F9", "F10", "F12", "Alt+
 MEDIA_KEYS = "org.gnome.settings-daemon.plugins.media-keys"
 
 
-def key_label(binding):
+def key_label(binding: str) -> str:
     """GNOME's "<Control><Alt>d" as "Ctrl+Alt+D"."""
     mods, key = re.match(r"((?:<\w+>)*)(.*)", binding).groups()
     mods = re.sub(r"<(\w+)>", r"\1+", mods).replace("Primary+", "Ctrl+").replace("Control+", "Ctrl+")
     return mods + key[:1].upper() + key[1:]
 
 
-def parse_key(text):
+def parse_key(text: str) -> str | None:
     """"Ctrl+Alt+D" or "F6" as GNOME's "<Control><Alt>d" / "F6"; None if it isn't a usable key."""
     *mods, key = [part.strip() for part in text.split("+")]
     names = {"ctrl": "<Control>", "control": "<Control>", "alt": "<Alt>", "shift": "<Shift>",
@@ -91,7 +92,7 @@ def parse_key(text):
     return "".join(names[m.lower()] for m in mods) + key
 
 
-def gnome_shortcuts():
+def gnome_shortcuts() -> dict[str, tuple[str, str]] | None:
     """Every GNOME custom shortcut as {path: (binding, command)}, or None when not on GNOME."""
     def get(*args):
         r = subprocess.run(["gsettings", "get", *args], capture_output=True, text=True, timeout=5)
@@ -106,7 +107,7 @@ def gnome_shortcuts():
         return None
 
 
-def runs_command(command, cmd):
+def runs_command(command: str, cmd: str) -> bool:
     """Whether a shortcut's command line runs TuxWhisper's cmd: `<path>/asr cmd` from a git
     clone or `<path>/tuxwhisper cmd` when installed, paths quoted or not. Exact, so a shortcut
     running some other program whose name merely ends in "asr" isn't mistaken for ours."""
@@ -117,12 +118,12 @@ def runs_command(command, cmd):
     return len(words) == 2 and os.path.basename(words[0]) in ("asr", store.APP) and words[1] == cmd
 
 
-def our_shortcut(shortcuts, cmd):
+def our_shortcut(shortcuts: dict[str, tuple[str, str]], cmd: str) -> tuple[str, str] | None:
     """(path, binding) of the shortcut running cmd, from gnome_shortcuts(), or None."""
     return next(((p, b) for p, (b, c) in shortcuts.items() if runs_command(c, cmd)), None)
 
 
-def set_shortcut(cmd, binding, path, paths):
+def set_shortcut(cmd: str, binding: str, path: str | None, paths: list[str]) -> str:
     """Point TuxWhisper's shortcut for cmd at binding, creating the shortcut if needed; its path."""
     def gs(*args):
         subprocess.run(["gsettings", "set", *args], check=True, timeout=5)
@@ -137,7 +138,7 @@ def set_shortcut(cmd, binding, path, paths):
     return path
 
 
-def bind_gnome():
+def bind_gnome() -> None:
     """Add GNOME custom shortcuts for the default keys, keeping any the user already changed."""
     shortcuts = gnome_shortcuts()
     if shortcuts is None:
@@ -158,17 +159,17 @@ def bind_gnome():
         print(f"{key_label(key):7} {cmd_path} {cmd}")
 
 
-def sound(name):
+def sound(name: str) -> None:
     """Play a freedesktop theme sound; silently skipped if no player or file is found."""
     path = f"/usr/share/sounds/freedesktop/stereo/{name}.oga"
-    volume = store.settings()["sound_volume"] / 100
+    volume = store.settings().sound_volume / 100
     if shutil.which("pw-play"):
         cmd = ["pw-play", f"--volume={volume}", path]
     elif shutil.which("paplay"):
         cmd = ["paplay", f"--volume={int(volume * 65536)}", path]
     else:
         return
-    if store.settings()["sounds"] and os.path.exists(path):
+    if store.settings().sounds and os.path.exists(path):
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -197,7 +198,7 @@ def track_notification(nid, open_):
             f.write("\n".join(sorted(ids)))
 
 
-def close_stale_notifications():
+def close_stale_notifications() -> None:
     path = open_notifications_path()
     try:
         with open(path) as f:
@@ -207,7 +208,7 @@ def close_stale_notifications():
         pass
 
 
-def close_notification(nid):
+def close_notification(nid: str | None) -> None:
     track_notification(nid, open_=False)
     if nid and shutil.which("gdbus"):
         subprocess.Popen(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
@@ -221,7 +222,7 @@ def close_notification(nid):
 USE_XCLIP = bool(os.environ.get("DISPLAY") and shutil.which("xclip"))
 
 
-def clipboard_get(selection="clipboard"):
+def clipboard_get(selection: str = "clipboard") -> str | None:
     """Text in the clipboard or primary selection, or None if empty or not text (e.g. an image)."""
     if USE_XCLIP:
         cmd = ["xclip", "-selection", selection, "-o", "-t", "UTF8_STRING"]
@@ -234,7 +235,7 @@ def clipboard_get(selection="clipboard"):
     return r.stdout.decode(errors="replace") if r.returncode == 0 else None
 
 
-def clipboard_set(text, selection="clipboard"):
+def clipboard_set(text: str, selection: str = "clipboard") -> bool:
     if USE_XCLIP:
         cmd = ["xclip", "-selection", selection]
     else:
@@ -248,7 +249,7 @@ def clipboard_set(text, selection="clipboard"):
 
 
 @functools.cache
-def have_yad():
+def have_yad() -> bool:
     return shutil.which("yad") is not None
 
 
@@ -282,7 +283,7 @@ def yad_args(args):
 DIALOG_CANCELLED = (1, 252)
 
 
-def zenity(*args):
+def zenity(*args: str) -> str | None:
     """Show a zenity dialog, or the same dialog in yad when it's installed: yad opens about
     a second sooner than zenity 4. None if cancelled; raises RuntimeError if the dialog
     couldn't be shown, so a missing or broken tool isn't mistaken for the user's Cancel."""
@@ -315,7 +316,7 @@ def fit(headers, rows):
     return f"--width={min(max(width, 360), 1400)}", f"--height={min(max(height, 300), 800)}"
 
 
-def edit_list(path, title, help_text):
+def edit_list(path: str, title: str, help_text: str) -> None:
     """Edit a vocab/replacements file in a dialog; the file keeps its comments."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if not os.path.exists(path):
@@ -328,7 +329,7 @@ def edit_list(path, title, help_text):
             f.write(text + "\n")
 
 
-def edit_text(text, title, ok_label, explain=None):
+def edit_text(text: str, title: str, ok_label: str, explain: str | None = None) -> str | None:
     """Show text in an editable box, with explain above it; the edited text, or None if
     cancelled. zenity's text-info has no --text, so there explain goes in the title. The draft lives in
     the private runtime dir, since it's dictated text, and never anywhere else; a file of its
@@ -350,7 +351,7 @@ def edit_text(text, title, ok_label, explain=None):
             os.remove(draft)
 
 
-def pick(title, options, current):
+def pick(title: str, options: list[str], current: str | None) -> str | None:
     # A plain list, not --radiolist: there, clicking a row's text doesn't tick its button,
     # so Select silently returned the old value.
     return zenity("--list", f"--title={title}", *fit(("Current", "Value"), [("✓", o) for o in options]),

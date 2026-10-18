@@ -13,6 +13,9 @@ import time
 import traceback
 import unicodedata
 import wave
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
+from typing import Any
 
 from tuxwhisper import desktop, engine, llm, store
 from tuxwhisper.client import request, send, sock_path  # noqa: F401 - re-exported for menu and tests
@@ -21,6 +24,16 @@ from tuxwhisper.client import request, send, sock_path  # noqa: F401 - re-export
 CLIP_LEVEL, CLIP_SHARE, CLIP_WARN_EVERY = 0.99, 0.001, 600  # level, share of samples, seconds
 RETRY_MAX_SECONDS = 30  # whispered takes longer than this aren't retried without the voice filter
 HINT_EVERY = 300  # seconds between lookups of the settings key shown under "Recording…"
+
+
+@dataclass
+class Take:
+    """A transcribed take, kept for the save key: its audio, Whisper's text (matching the
+    audio), its history entry once pasted, and its number among the daemon's takes."""
+    audio: Any
+    text: str
+    entry: dict | None = None
+    id: int = 0
 
 
 class Dictation:
@@ -77,10 +90,14 @@ class Dictation:
         self.last_used = time.monotonic()
         self.model_lock = threading.Lock()  # held while the speech model is used, loaded or freed
         self.last_lang = "en"  # the last take's language: the guess for the next one's prompt
-        self.last_take = None  # (audio, text) of the latest transcription
-        self.take_id = 0  # counts takes, so a cancelled save can tell whether a newer one came
+        self.last_take: Take | None = None  # the latest transcription, until the save key takes it
+        self.takes = 0  # counts takes, so a cancelled save can tell whether a newer one came
         self.last_save = 0.0
         self.held = False
+        self.rewrite = False  # the current take's mode, set by the key that started it
+        # The cleanup model's warm-up for the current take, if it's a cleanup one.
+        self.warming: Future | None = None
+        self.background = ThreadPoolExecutor(max_workers=2, thread_name_prefix=store.APP)
 
     # GNOME re-runs the shortcut on key auto-repeat (~every 0.1s here, after a 0.5s delay),
     # so a burst of presses means the key is held: treat it as push-to-talk.
@@ -123,13 +140,13 @@ class Dictation:
                 self.model_lock.release()
 
     def unload_if_idle(self):
-        minutes = store.settings()["asr_unload_minutes"]
+        minutes = store.settings().asr_unload_minutes
         if (minutes and engine.DEVICE != "cpu" and self.stream is None
                 and time.monotonic() - self.last_used > minutes * 60
                 and self.model_lock.acquire(blocking=False)):  # not while one is transcribing
             try:
-                if self.model is not None and engine.speech_loaded(self.model):
-                    engine.speech_unload(self.model)
+                if self.model is not None and self.model.loaded():
+                    self.model.unload()
                     print(f"speech model unloaded after {minutes} min idle", flush=True)
             finally:
                 self.model_lock.release()
@@ -140,11 +157,11 @@ class Dictation:
         with self.model_lock:
             if self.model is None:
                 return self.use_smaller_model(self.fallback_from)
-            if engine.speech_loaded(self.model):
+            if self.model.loaded():
                 return True
             t0 = time.time()
             try:
-                engine.speech_load(self.model)
+                self.model.load()
             except RuntimeError as e:
                 if not engine.out_of_memory(e):
                     raise
@@ -190,12 +207,9 @@ class Dictation:
         threading.Thread(target=self.ensure_model, daemon=True).start()  # overlaps the speech
         self.chunks = []
         self.rewrite = rewrite  # mode is set by the key that started the take
-        if rewrite:  # a cold load takes seconds; overlap it with the speech
-            # (thread, result): the cleanup skips its own GPU check when the warm-up confirmed it.
-            result = []
-            thread = threading.Thread(target=lambda: result.append(llm.warm_rewrite_model()), daemon=True)
-            thread.start()
-            self.warming = (thread, result)
+        # A cold load takes seconds, so overlap it with the speech; the cleanup skips its own
+        # GPU check when the warm-up confirmed it.
+        self.warming = self.background.submit(llm.warm_rewrite_model) if rewrite else None
         desktop.sound("device-added")  # 0.2 s; over before the mic finishes opening
         try:
             stream = self.sd.InputStream(
@@ -238,7 +252,7 @@ class Dictation:
         chunks, self.chunks = self.chunks, []
         # This take's own mode: the next take may start before this one is pasted.
         ticket, self.next_ticket = self.next_ticket, self.next_ticket + 1
-        return chunks, excess, self.rewrite, getattr(self, "warming", None), ticket, indicator
+        return chunks, excess, self.rewrite, self.warming, ticket, indicator
 
     def toggle(self, cut_at=None, rewrite=False):
         with self.lock:
@@ -276,7 +290,7 @@ class Dictation:
     def transcribe(self, audio):
         """The take's (text, language) (under self.model_lock), with whispered takes retried
         without the voice filter."""
-        lang = store.settings()["language"] or None  # "" is automatic
+        lang = store.settings().language or None  # "" is automatic
         # The English prompt and vocabulary make Whisper translate other languages into English.
         # With no language set, guess the prompt from the last take's language and let Whisper
         # detect it in the same pass: one transcription instead of a detection and then one.
@@ -285,7 +299,7 @@ class Dictation:
         if not lang:
             lang = getattr(info, "language", None)
             if lang is None:  # a model that doesn't report it: detect, as a separate pass
-                lang = self.model.detect_language(audio, vad_filter=True)[0]
+                lang = self.model.detect_language(audio)[0]
             if (lang == "en") != english:  # guessed the wrong prompt: redo with the right one
                 english = lang == "en"
                 segments, _ = self._transcribe(audio, lang, english, vad_filter=True)
@@ -305,8 +319,8 @@ class Dictation:
 
     def _transcribe(self, audio, lang, english, vad_filter):
         """(segments, info) from the model; lang None detects the language."""
-        return self.model.transcribe(audio, language=lang, beam_size=1, vad_filter=vad_filter,
-                                     initial_prompt=engine.PROMPT if english else None,
+        return self.model.transcribe(audio, language=lang, vad_filter=vad_filter,
+                                     prompt=engine.PROMPT if english else None,
                                      hotwords=store.vocab() if english else None)
 
     def process(self, chunks, excess, rewrite, warming, status=None):
@@ -333,7 +347,7 @@ class Dictation:
                 print(f"no GPU memory to transcribe ({e})", flush=True)
                 short_of_memory = True
             if short_of_memory:  # out of the except block, whose traceback holds the model's memory
-                engine.speech_unload(self.model)
+                self.model.unload()
                 if not self.use_smaller_model(self.fallback_from or self.model_name, self.model_name):
                     return  # it said so; "Didn't catch that" on top would mislead
                 try:
@@ -355,11 +369,10 @@ class Dictation:
             desktop.notify(missed[0], body=missed[1], level="warn")
         if not text:
             return
-        # Saved takes keep Whisper's text, matching the audio; [2] becomes its history entry.
-        take = [audio, text, None]
+        # Saved takes keep Whisper's text, matching the audio.
         with self.lock:
-            self.take_id += 1
-            self.last_take = take
+            self.takes += 1
+            take = self.last_take = Take(audio, text, id=self.takes)
         if rewrite:
             t0 = time.time()
             # Say so only when the cleanup is slow (the model is still loading, usually), in place
@@ -374,9 +387,7 @@ class Dictation:
             timer.start()
             on_gpu = None  # not known: llm_cleanup checks
             if warming:
-                thread, result = warming
-                thread.join()
-                on_gpu = True if result == [True] else None  # a failed warm-up is checked again
+                on_gpu = True if warming.result() is True else None  # a failed warm-up is checked again
             text = llm.llm_cleanup(text, lang, on_gpu=on_gpu)
             timer.cancel()
             timer.join()
@@ -384,7 +395,7 @@ class Dictation:
         text = store.apply_replacements(text)
         end_status(status)
         typed = self.paste(text + " ", snapshot)
-        take[2] = store.add_history(text, rewritten=rewrite, typed=typed)  # only a typed take can be retyped
+        take.entry = store.add_history(text, rewritten=rewrite, typed=typed)  # only a typed take can be retyped
         self.warn_if_clipped(audio)
         if time.monotonic() - self.last_hint > HINT_EVERY:  # in case the key changed; not every take
             self.last_hint = time.monotonic()
@@ -408,7 +419,7 @@ class Dictation:
     def save(self):
         """Offer to save the last take for fine-tuning, after the user checks its transcript."""
         with self.lock:  # each take is saved at most once
-            take, self.last_take, take_id = self.last_take, None, self.take_id
+            take, self.last_take = self.last_take, None
         if take is None:
             if time.monotonic() - self.last_save < Dictation.REPEAT_WINDOW:
                 return  # auto-repeat of the key that just saved
@@ -416,36 +427,35 @@ class Dictation:
             return
         self.last_save = time.monotonic()
         # Ask first, off the socket loop: dictation keys keep working while the dialog is open.
-        threading.Thread(target=self.confirm_save, args=(take, take_id), daemon=True).start()
+        threading.Thread(target=self.confirm_save, args=(take,), daemon=True).start()
 
-    def confirm_save(self, take, take_id):
+    def confirm_save(self, take):
         """Show the transcript for checking (a saved one must match the audio exactly), then
         save. Cancelled or failed: nothing is saved, and the take can still be saved with the key."""
-        audio, text, entry = take
         try:
-            confirmed = desktop.edit_text(text, "Save for fine-tuning", "Save",
+            confirmed = desktop.edit_text(take.text, "Save for fine-tuning", "Save",
                                           "Check the transcript matches what you said, then Save. "
                                           "Cancel keeps it; you can save it later.")
         except Exception:  # noqa: BLE001 - e.g. no dialog tool: say so rather than seem to ignore the key
             traceback.print_exc()
             desktop.notify("Couldn't open the save dialog", body="See the log: journalctl --user -u tuxwhisper",
                            level="error")
-            self.restore_take(take, take_id)
+            self.restore_take(take)
             return
         if confirmed is None or not confirmed.strip():
-            self.restore_take(take, take_id)
+            self.restore_take(take)
             return
         try:
-            self.write_recording(audio, confirmed.strip(), entry)
+            self.write_recording(take.audio, confirmed.strip(), take.entry)
         except Exception as e:  # noqa: BLE001 - e.g. a full disk: keep the take for another try
             traceback.print_exc()
             desktop.notify("Couldn't save the recording", body=write_error(e), level="error")
-            self.restore_take(take, take_id)
+            self.restore_take(take)
 
-    def restore_take(self, take, take_id):
+    def restore_take(self, take):
         """Let the save key offer take again, unless a newer take came while its dialog was open."""
         with self.lock:
-            if self.last_take is None and self.take_id == take_id:
+            if self.last_take is None and self.takes == take.id:
                 self.last_take = take
 
     def write_recording(self, audio, text, entry):
@@ -511,7 +521,7 @@ class Dictation:
 
     def snapshot_clipboard(self):
         """Start reading the selections the paste key overwrites; paste() takes the result."""
-        selections = paste_selections(store.settings()["paste_key"])
+        selections = paste_selections(store.settings().paste_key)
         saved = {}
         thread = threading.Thread(target=lambda: saved.update(read_selections(selections)), daemon=True)
         thread.start()
@@ -527,7 +537,7 @@ class Dictation:
             else:
                 desktop.notify(*COPY_FAILED, level="error")
             return False
-        paste_key = store.settings()["paste_key"]
+        paste_key = store.settings().paste_key
         keys = [getattr(self.ec, k) for k in store.PASTE_KEYS[paste_key]]
         selections = paste_selections(paste_key)
         saved = {}

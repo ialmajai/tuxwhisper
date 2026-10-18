@@ -105,21 +105,21 @@ def test_settings_reject_bad_values():
     with open(store.CONFIG, "w") as f:
         f.write('sound_volume = "loud"\npaste_key = "alt+v"\nlanguage = 7\nmode_models = "x"\n')
     s = store.settings()
-    assert s["sound_volume"] == 40
-    assert s["paste_key"] == "shift+insert"
-    assert s["language"] == ""  # a wrong-typed language would reach Whisper
-    assert s["mode_models"] == {}
+    assert s.sound_volume == 40
+    assert s.paste_key == "shift+insert"
+    assert s.language == ""  # a wrong-typed language would reach Whisper
+    assert s.mode_models == {}
 
 
 def test_settings_clamp_volume():
     with open(store.CONFIG, "w") as f:
         f.write("sound_volume = 250\n")
-    assert store.settings()["sound_volume"] == 100
+    assert store.settings().sound_volume == 100
 
 
 def test_bad_env_volume_does_not_crash_import(tmp_path):
     env = dict(os.environ, ASR_SOUND_VOLUME="abc", XDG_CONFIG_HOME=str(tmp_path))
-    code = "import tuxwhisper.asr; from tuxwhisper import store; print(store.settings()['sound_volume'])"
+    code = "import tuxwhisper.asr; from tuxwhisper import store; print(store.settings().sound_volume)"
     r = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "40"
@@ -159,7 +159,7 @@ class FakeModel:
     def loaded(self):
         return self.is_loaded
 
-    def unload(self):
+    def unload(self, to_cpu=True):
         self.is_loaded = False
 
     def load(self):
@@ -244,7 +244,7 @@ def saved_rows():
 
 def test_saved_recordings_are_private(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.last_take = [np.zeros(store.RATE, dtype=np.float32), "hello", None]
+    d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
     save_with_answer(monkeypatch, d, "hello")
     mode = stat.S_IMODE(os.stat(store.RECORDINGS).st_mode)
     assert mode == 0o700
@@ -252,7 +252,7 @@ def test_saved_recordings_are_private(monkeypatch):
 
 def test_save_asks_first_and_keeps_the_fixed_transcript(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.last_take = [np.zeros(store.RATE, dtype=np.float32), "send it to jon", None]
+    d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "send it to jon")
     shown = save_with_answer(monkeypatch, d, "send it to John")
     assert shown == ["send it to jon"]
     assert [r.split(",", 1)[1] for r in saved_rows()] == ["send it to John"]
@@ -260,7 +260,7 @@ def test_save_asks_first_and_keeps_the_fixed_transcript(monkeypatch):
 
 def test_save_dialog_that_fails_is_reported_and_the_take_kept(monkeypatch):
     d = make_dictation(monkeypatch)
-    take = d.last_take = [np.zeros(store.RATE, dtype=np.float32), "hello", None]
+    take = d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
     monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
     def missing(*a):
         raise RuntimeError("zenity isn't installed")
@@ -271,7 +271,7 @@ def test_save_dialog_that_fails_is_reported_and_the_take_kept(monkeypatch):
 
 def test_save_that_fails_to_write_is_reported_and_the_take_kept(monkeypatch):
     d = make_dictation(monkeypatch)
-    take = d.last_take = [np.zeros(store.RATE, dtype=np.float32), "hello", None]
+    take = d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
     def full(*a):
         raise OSError("No space left on device")
     d.write_recording = full
@@ -289,11 +289,11 @@ def test_save_errors_are_said_plainly(err, body):
 
 def test_cancelled_save_does_not_bring_back_an_older_take(monkeypatch):
     d = make_dictation(monkeypatch)
-    d.last_take = [np.zeros(store.RATE, dtype=np.float32), "old", None]
+    d.last_take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "old")
     monkeypatch.setattr(daemon, "threading", types.SimpleNamespace(Thread=InlineThread))
     def dialog(text, title, ok, explain=None):
         # While it's open, a newer take is dictated and the save key takes it for its own dialog.
-        d.take_id += 1
+        d.takes += 1
         d.last_take = None
         # ... and then this one is cancelled (returns None)
     monkeypatch.setattr(desktop, "edit_text", dialog)
@@ -337,7 +337,7 @@ def test_edit_text_drafts_are_private_unique_and_removed(monkeypatch, tmp_path):
 
 def test_cancelled_save_writes_nothing_and_can_be_asked_again(monkeypatch):
     d = make_dictation(monkeypatch)
-    take = [np.zeros(store.RATE, dtype=np.float32), "hello", None]
+    take = daemon.Take(np.zeros(store.RATE, dtype=np.float32), "hello")
     d.last_take = take
     save_with_answer(monkeypatch, d, None)
     assert not os.path.exists(store.RECORDINGS)
@@ -366,7 +366,7 @@ def test_unload_settings_validate():
     with open(store.CONFIG, "w") as f:
         f.write('asr_unload_minutes = -5\nllm_unload_minutes = "soon"\n')
     s = store.settings()
-    assert s["asr_unload_minutes"] == 30 and s["llm_unload_minutes"] == 30
+    assert s.asr_unload_minutes == 30 and s.llm_unload_minutes == 30
 
 
 @pytest.mark.parametrize("minutes, keep_alive", [(30, "30m"), (0, "0m"), (-1, -1)])
@@ -1177,10 +1177,10 @@ def test_failed_warm_up_frees_the_model(monkeypatch):
     freed = []
 
     class Broken:
-        def transcribe(self, audio):
+        def transcribe(self, audio, **_):
             raise RuntimeError("CUDA failed with error out of memory")
 
-        def unload(self):
+        def unload(self, to_cpu=True):
             freed.append(True)
 
     monkeypatch.setattr(engine, "DEVICE", "vulkan")
@@ -1201,8 +1201,8 @@ class LanguageModel(FakeModel):
     def detect_language(self, audio, **_):
         raise AssertionError("detected separately")
 
-    def transcribe(self, audio, language=None, initial_prompt=None, **_):
-        self.calls.append((language, initial_prompt is not None))
+    def transcribe(self, audio, language=None, prompt=None, **_):
+        self.calls.append((language, prompt is not None))
         return [types.SimpleNamespace(text="hi")], types.SimpleNamespace(language=language or self.lang)
 
 
@@ -1268,7 +1268,7 @@ def test_paste_restores_the_clipboard_read_during_transcription(monkeypatch):
 def test_cli_key_commands_import_only_the_socket_client():
     code = ("import sys; from tuxwhisper import asr, client; "
             "print([m for m in ('tuxwhisper.engine', 'tuxwhisper.llm', 'tuxwhisper.menu', "
-            "'tuxwhisper.daemon', 'urllib.request', 'http.client') if m in sys.modules])")
+            "'tuxwhisper.daemon', 'tuxwhisper.settings', 'dataclasses', 'urllib.request', 'http.client') if m in sys.modules])")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == "[]"
 

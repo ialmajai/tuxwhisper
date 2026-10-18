@@ -8,7 +8,7 @@ import sys
 from tuxwhisper import desktop, store
 
 
-def sock_path():
+def sock_path() -> str:
     # XDG_RUNTIME_DIR is private to the user (0700); a shared fallback like /tmp would let
     # other local users reach the socket, so refuse to run without it.
     runtime = os.environ.get("XDG_RUNTIME_DIR")
@@ -18,7 +18,7 @@ def sock_path():
     return os.path.join(runtime, f"{store.APP}.sock")
 
 
-def request(cmd, timeout=60):
+def request(cmd: str, timeout: float = 60) -> str | None:
     """Send cmd to the daemon and wait for its reply; None if it isn't running."""
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
@@ -31,7 +31,7 @@ def request(cmd, timeout=60):
         return None
 
 
-def send(cmd):
+def send(cmd: str) -> None:
     """Send a key's command to the daemon; it answers by closing the connection."""
     if request(cmd, timeout=5) is None:
         state = subprocess.run(["systemctl", "--user", "is-active", store.APP],

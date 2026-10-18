@@ -1,4 +1,5 @@
 """The settings menu, the speech model picker and correcting the last transcript."""
+import dataclasses
 import difflib
 import json
 import os
@@ -209,36 +210,36 @@ def settings_menu():
         s, cfg = store.settings(), store.read_config()
         start = dict(cfg)
         # The menu can't see the service's environment, so unchanged settings say so.
-        tag = {k: "" if k in cfg else " (default)" for k in s}
+        tag = {f.name: "" if f.name in cfg else " (default)" for f in dataclasses.fields(s)}
         mode = llm.current_mode()
         # In groups: past transcripts, speech, LLM cleanup, then keys and sounds.
         rows = ["correct", "Correct last transcript", "Fix…",
                 "history", "Recent transcripts", f"{len(store.load_history())} this session",
-                "language", "Language", store.LANGUAGES.get(s["language"], "auto-detect") + tag["language"],
-                "asr_model", "Speech model", (s["asr_model"] or engine.short_name(engine.default_asr_model()))
+                "language", "Language", store.LANGUAGES.get(s.language, "auto-detect") + tag["language"],
+                "asr_model", "Speech model", (s.asr_model or engine.short_name(engine.default_asr_model()))
                 + tag["asr_model"],
-                "asr_unload_minutes", "Speech model in memory", unload_label(s["asr_unload_minutes"], 0)
+                "asr_unload_minutes", "Speech model in memory", unload_label(s.asr_unload_minutes, 0)
                 + tag["asr_unload_minutes"],
                 "vocab", "Vocabulary", "Edit…",
                 "replacements", "Replacements", "Edit…",
                 "mode", "Cleanup style", mode + tag["mode"],
-                "rewrite_model", "Cleanup model", s["rewrite_model"] + tag["rewrite_model"],
-                "mode_model", f"Model for {mode}", s["mode_models"].get(mode, "same as cleanup model"),
-                "llm_unload_minutes", "LLM in memory", unload_label(s["llm_unload_minutes"], -1)
+                "rewrite_model", "Cleanup model", s.rewrite_model + tag["rewrite_model"],
+                "mode_model", f"Model for {mode}", s.mode_models.get(mode, "same as cleanup model"),
+                "llm_unload_minutes", "LLM in memory", unload_label(s.llm_unload_minutes, -1)
                 + tag["llm_unload_minutes"],
                 "modes", "Custom cleanup styles", "Edit…",
                 "keys", "Keys", keys_summary(),
-                "paste_key", "Paste key", PASTE_LABELS[s["paste_key"]] + tag["paste_key"],
-                "sounds", "Sounds", ("On" if s["sounds"] else "Off") + tag["sounds"],
-                "sound_volume", "Sound volume", f"{s['sound_volume']}%" + tag["sound_volume"]]
+                "paste_key", "Paste key", PASTE_LABELS[s.paste_key] + tag["paste_key"],
+                "sounds", "Sounds", ("On" if s.sounds else "Off") + tag["sounds"],
+                "sound_volume", "Sound volume", f"{s.sound_volume}%" + tag["sound_volume"]]
         choice = menu_choice(rows)
         if not choice:
             return
         if choice == "sounds":
-            cfg["sounds"] = not s["sounds"]
+            cfg["sounds"] = not s.sounds
         elif choice == "sound_volume":
             picked = desktop.zenity("--scale", "--title=Sound volume", "--min-value=0", "--max-value=100",
-                            "--step=5", f"--value={s['sound_volume']}",
+                            "--step=5", f"--value={s.sound_volume}",
                             "--text=Percent of your system volume:")
             if picked:
                 store.update_settings({"sound_volume": int(picked)})
@@ -246,13 +247,13 @@ def settings_menu():
                 continue
         elif choice == "language":
             names = {"auto-detect": "", **{f"{n} ({c})": c for c, n in store.LANGUAGES.items()}}
-            current = next((n for n, c in names.items() if c == s["language"]), "auto-detect")
+            current = next((n for n, c in names.items() if c == s.language), "auto-detect")
             picked = desktop.pick("Language", list(names), current)
             if picked:
                 cfg["language"] = names[picked]
         elif choice == "paste_key":
             labels = {PASTE_LABELS[k]: k for k in store.PASTE_KEYS}
-            picked = desktop.pick("Paste key", list(labels), PASTE_LABELS[s["paste_key"]])
+            picked = desktop.pick("Paste key", list(labels), PASTE_LABELS[s.paste_key])
             if picked:
                 cfg["paste_key"] = labels[picked]
         elif choice in ("asr_unload_minutes", "llm_unload_minutes"):
@@ -260,11 +261,11 @@ def settings_menu():
             options = [-1, 5, 10, 30, 60] if never == 0 else [0, 5, 10, 30, 60, -1]
             labels = {unload_label(m, never): m for m in options}
             title = "Speech model in memory" if never == 0 else "LLM in memory"
-            picked = desktop.pick(title, list(labels), unload_label(s[choice], never))
+            picked = desktop.pick(title, list(labels), unload_label(getattr(s, choice), never))
             if picked:
                 cfg[choice] = max(labels[picked], never)  # "always loaded" is stored as never
         elif choice == "asr_model":
-            pick_asr_model(s["asr_model"])
+            pick_asr_model(s.asr_model)
             continue
         elif choice == "keys":
             keys_menu()
@@ -291,15 +292,15 @@ def settings_menu():
                        "--text=No Ollama models installed. Install one with: ollama pull llama3.2")
                 continue
             if choice == "rewrite_model":
-                current = s["rewrite_model"]
+                current = s.rewrite_model
                 picked = desktop.pick("Cleanup model", models, current if ":" in current else current + ":latest")
                 if picked:
                     cfg["rewrite_model"] = picked
             else:
                 same = "same as cleanup model"
-                picked = desktop.pick(f"Model for {mode}", [same, *models], s["mode_models"].get(mode, same))
+                picked = desktop.pick(f"Model for {mode}", [same, *models], s.mode_models.get(mode, same))
                 if picked:
-                    cfg["mode_models"] = {k: v for k, v in s["mode_models"].items() if k != mode}
+                    cfg["mode_models"] = {k: v for k, v in s.mode_models.items() if k != mode}
                     if picked != same:
                         cfg["mode_models"][mode] = picked
         elif choice == "history":

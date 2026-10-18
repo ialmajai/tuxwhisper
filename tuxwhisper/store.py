@@ -11,14 +11,6 @@ import time
 import tomllib
 
 APP = "tuxwhisper"
-LANGUAGE = os.environ.get("ASR_LANGUAGE") or None  # e.g. "en"; None = auto-detect
-REWRITE_MODEL = os.environ.get("ASR_REWRITE_MODEL", "llama3.2")
-# Shift+Insert pastes in browsers, editors and terminals alike, and unlike Ctrl+V it doesn't
-# depend on the keyboard layout (keys are sent by position, so Ctrl+V is Ctrl+K on Dvorak).
-PASTE_KEY = os.environ.get("ASR_PASTE_KEY", "shift+insert")
-SOUNDS = os.environ.get("ASR_SOUNDS", "1") != "0"  # beep on start and stop
-# Percent of the system volume, so the beeps never get louder than your other sounds.
-SOUND_VOLUME = os.environ.get("ASR_SOUND_VOLUME", "40")  # validated in settings()
 PASTE_KEYS = {"shift+insert": ["KEY_LEFTSHIFT", "KEY_INSERT"],
               "ctrl+v": ["KEY_LEFTCTRL", "KEY_V"],
               "ctrl+shift+v": ["KEY_LEFTCTRL", "KEY_LEFTSHIFT", "KEY_V"]}
@@ -54,7 +46,7 @@ def file_lock(path):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def atomic_write(path, text):
+def atomic_write(path: str, text: str) -> None:
     """Replace path's contents in one step: a reader never sees a half-written file, and a
     crash mid-write leaves the old file instead of a truncated one."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -66,7 +58,7 @@ def atomic_write(path, text):
     os.replace(tmp, path)
 
 
-def read_config():
+def read_config() -> dict[str, object]:
     """Only the settings changed in the menu. An unreadable file counts as empty (defaults),
     but is reported once, and save_settings keeps a copy of it rather than overwriting it."""
     try:
@@ -84,35 +76,24 @@ def read_config():
         return {}
 
 
-def settings():
+def settings():  # -> Settings (see tuxwhisper.settings)
     """Live settings: environment defaults overridden by the config file, re-read on every use."""
-    s = {"sounds": SOUNDS, "sound_volume": SOUND_VOLUME, "language": LANGUAGE or "",
-         "paste_key": PASTE_KEY, "rewrite_model": REWRITE_MODEL, "mode": "Clean up",
-         "asr_model": os.environ.get("ASR_MODEL", ""),
-         # Minutes idle before freeing GPU memory: speech model 0 = never, LLM -1 = never.
-         "asr_unload_minutes": 30, "llm_unload_minutes": 30,
-         "mode_models": {}}
-    s.update({k: v for k, v in read_config().items() if k in s})
-    try:
-        s["sound_volume"] = min(max(int(s["sound_volume"]), 0), 100)
-    except (TypeError, ValueError):
-        s["sound_volume"] = 40
-    if s["paste_key"] not in PASTE_KEYS:
-        s["paste_key"] = "shift+insert"
-    if not isinstance(s["mode_models"], dict):
-        s["mode_models"] = {}
-    for key, low in (("asr_unload_minutes", 0), ("llm_unload_minutes", -1)):
-        if not isinstance(s[key], int) or isinstance(s[key], bool) or s[key] < low:
-            s[key] = 30
-    if s["language"] not in LANGUAGES:  # also catches a wrong type from a hand-edited config
-        s["language"] = ""
-    return s
+    from tuxwhisper.settings import Settings
+    return Settings.from_config(read_config())
+
+
+def __getattr__(name):
+    """store.Settings, imported on first use: dataclasses costs a key press ~6 ms."""
+    if name == "Settings":
+        from tuxwhisper.settings import Settings
+        return Settings
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 MODES_FILE = os.path.join(CONFIG_DIR, "modes.txt")
 
 
-def vocab():
+def vocab() -> str | None:
     try:
         with open(VOCAB) as f:
             words = [w.strip() for w in f if w.strip() and not w.startswith("#")]
@@ -121,7 +102,7 @@ def vocab():
     return ", ".join(words) or None
 
 
-def apply_replacements(text):
+def apply_replacements(text: str) -> str:
     try:
         with open(REPLACEMENTS) as f:
             rules = [line.split("=>", 1) for line in f if "=>" in line and not line.startswith("#")]
@@ -138,7 +119,7 @@ def apply_replacements(text):
     return text
 
 
-def dataset_size(meta):
+def dataset_size(meta: str) -> tuple[int, float]:
     """Number of saved takes and their total length in seconds."""
     takes, frames = dataset_frames(meta)
     return takes, frames / RATE
@@ -149,7 +130,7 @@ SIZE_CACHE = ".size-cache.json"
 WAV_HEADER = 44  # bytes before the samples in the files write_recording makes; 2 bytes a sample
 
 
-def dataset_frames(meta):
+def dataset_frames(meta: str) -> tuple[int, int]:
     """(takes, samples) of the recordings listed in meta: from the cache when it's current,
     else from the files' sizes (no need to open each one)."""
     cache = os.path.join(os.path.dirname(meta), SIZE_CACHE)
@@ -184,14 +165,14 @@ def save_dataset_size(meta, takes, frames):
         json.dump({"takes": takes, "frames": frames, "stamp": size_stamp(meta)}, f)
 
 
-def history_path():
+def history_path() -> str | None:
     # The runtime dir is private to the user and emptied at logout, so dictated text
     # doesn't pile up on disk.
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     return os.path.join(runtime, f"{APP}-history.json") if runtime else None
 
 
-def load_history():
+def load_history() -> list[dict]:
     try:
         with open(history_path()) as f:
             return json.load(f)
@@ -199,7 +180,7 @@ def load_history():
         return []
 
 
-def add_history(text, rewritten=False, typed=False):
+def add_history(text: str, rewritten: bool = False, typed: bool = False) -> dict | None:
     """Keep the last 20 transcripts for "Recent transcripts" and "Correct last transcript".
     typed: it was typed at the cursor (not just copied), so a correction may erase and retype it."""
     if history_path():
@@ -211,11 +192,11 @@ def add_history(text, rewritten=False, typed=False):
     return None
 
 
-def save_history(items):
+def save_history(items: list[dict]) -> None:
     atomic_write(history_path(), json.dumps(items))
 
 
-def update_history_entry(entry, **changes):
+def update_history_entry(entry: dict, **changes: object) -> None:
     """Change one history entry, found again by its time and text: other takes may have been
     added since it was read."""
     with file_lock(history_path()):
@@ -226,14 +207,14 @@ def update_history_entry(entry, **changes):
             save_history(items)
 
 
-def mark_last_saved(name):
+def mark_last_saved(name: str) -> None:
     """Note that F4 saved the last take as recordings/name, so a correction can fix its transcript."""
     items = load_history()
     if items:
         update_history_entry(items[-1], recording=name)
 
 
-def retype_path():
+def retype_path() -> str:
     return os.path.join(os.environ.get("XDG_RUNTIME_DIR", ""), f"{APP}-retype.json")
 
 
@@ -271,7 +252,7 @@ def toml_value(v):
     return json.dumps(v, ensure_ascii=False).replace("\x7f", "\\u007F")
 
 
-def save_settings(s):
+def save_settings(s: dict[str, object]) -> None:
     """Write only the given settings, so unchanged ones keep following the environment."""
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
     try:
@@ -285,7 +266,7 @@ def save_settings(s):
                  + "".join(f"{k} = {toml_value(v)}\n" for k, v in s.items()))
 
 
-def update_settings(changes):
+def update_settings(changes: dict[str, object]) -> None:
     """Save only these settings on top of the current file, so a change made elsewhere in the
     meantime (e.g. a speech model download finishing) isn't overwritten with an old value."""
     if changes:
@@ -298,7 +279,7 @@ def pending_model_path():
     return os.path.join(runtime, f"{APP}-pending-model") if runtime else None
 
 
-def pending_model():
+def pending_model() -> str | None:
     """The speech model being downloaded to switch to, if any."""
     try:
         with open(pending_model_path()) as f:
@@ -307,14 +288,14 @@ def pending_model():
         return None
 
 
-def set_pending_model(name):
+def set_pending_model(name: str | None) -> None:
     path = pending_model_path()
     if path:
         with open(path, "w") as f:
             f.write(name or "")
 
 
-def fix_recording_text(name, text):
+def fix_recording_text(name: str, text: str) -> None:
     """Replace the transcript of recordings/name in metadata.csv."""
     meta = os.path.join(RECORDINGS, "metadata.csv")
     with file_lock(meta):  # F4 appends to the same file
@@ -328,7 +309,7 @@ def fix_recording_text(name, text):
         atomic_write(meta, out.getvalue())
 
 
-def command_path():
+def command_path() -> str:
     """How shortcuts, the service and the launcher run TuxWhisper: ./asr in a git clone (the
     wrapper sets TUXWHISPER_CMD), else the `tuxwhisper` command that pip or uv installed."""
     return os.environ.get("TUXWHISPER_CMD") or shutil.which(APP) or os.path.join(OLD_REPO, "asr")

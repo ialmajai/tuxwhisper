@@ -52,20 +52,20 @@ MODES = {
 OLLAMA_OPTIONS = {"temperature": 0, "num_ctx": 4096, "num_gpu": 999}
 
 
-def ollama(path, payload=None, timeout=30):
+def ollama(path: str, payload: dict | None = None, timeout: float = 30) -> dict:
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(f"{OLLAMA_URL}{path}", data, {"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
 
 
-def llm_keep_alive():
+def llm_keep_alive() -> int | str:
     """How long Ollama keeps the cleanup model after use: -1 forever, 0 unloads right away."""
-    minutes = store.settings()["llm_unload_minutes"]
+    minutes = store.settings().llm_unload_minutes
     return -1 if minutes < 0 else f"{minutes}m"
 
 
-def rewrite_model_on_gpu():
+def rewrite_model_on_gpu() -> bool:
     """Load the rewrite model if needed; True if it sits entirely in GPU memory.
 
     Running on the CPU makes cleanup slow, so a model that doesn't fit is not used.
@@ -90,7 +90,7 @@ def rewrite_model_on_gpu():
     return False
 
 
-def warm_rewrite_model():
+def warm_rewrite_model() -> bool | None:
     """Load the cleanup model while the user speaks; rewrite_model_on_gpu()'s answer, or None
     if it failed (llm_cleanup retries and reports it)."""
     try:
@@ -100,7 +100,7 @@ def warm_rewrite_model():
         return None
 
 
-def modes():
+def modes() -> dict[str, str]:
     """Built-in modes plus the user's modes.txt (which can also override a built-in)."""
     found = dict(MODES)
     try:
@@ -114,18 +114,18 @@ def modes():
     return found
 
 
-def current_mode():
-    mode = store.settings()["mode"]
+def current_mode() -> str:
+    mode = store.settings().mode
     return mode if mode in modes() else "Clean up"  # e.g. a custom mode was deleted
 
 
-def mode_model():
+def mode_model() -> str:
     """The current mode's own model, else the default rewrite model."""
     s = store.settings()
-    return s["mode_models"].get(current_mode()) or s["rewrite_model"]
+    return s.mode_models.get(current_mode()) or s.rewrite_model
 
 
-def rewrite_task(text):
+def rewrite_task(text: str) -> str:
     """The style's instruction, plus the self-correction rule when the speaker corrected themselves."""
     task = modes()[current_mode()]
     return f"{task} {SELF_CORRECTION}" if CORRECTION_CUE.search(text) else task
@@ -135,7 +135,7 @@ def rewrite_task(text):
 CONTEXT_SIZES = (4096, 8192)
 
 
-def context_size(system, text):
+def context_size(system: str, text: str) -> int | None:
     """The smallest context that holds the instructions, the transcript and a rewrite as long
     as it (about 3 characters a token, plus JSON overhead); None if even the largest can't.
     Too small a context doesn't fail: Ollama trims the input and the rewrite loses words."""
@@ -143,7 +143,7 @@ def context_size(system, text):
     return next((n for n in CONTEXT_SIZES if n >= need), None)
 
 
-def llm_cleanup(text, lang, on_gpu=None):
+def llm_cleanup(text: str, lang: str | None, on_gpu: bool | None = None) -> str:
     """LLM-cleaned transcript, or the original text if Ollama fails or lacks GPU memory.
     on_gpu: True when the warm-up just confirmed the model is on the GPU; None checks."""
     try:

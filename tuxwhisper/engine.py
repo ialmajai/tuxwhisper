@@ -7,6 +7,8 @@ import subprocess
 import sys
 import types
 import urllib.request
+from collections.abc import Iterable
+from typing import Any, Protocol
 
 from tuxwhisper import desktop, store
 
@@ -52,7 +54,7 @@ MAX_SYLLABLE_RATE = 8  # syllables per second of sound; fast speech is about 6-7
 SOUND_FLOOR, SOUND_CAP = 1e-4, 1e-3
 
 
-def sound_seconds(audio, rate=16000):
+def sound_seconds(audio: Any, rate: int = 16000) -> float:
     """How long the take contains sound: 20 ms frames well above its own quietest ones (within
     SOUND_FLOOR and SOUND_CAP). Not the first-to-last span, which breaths and clicks stretch."""
     import numpy as np
@@ -69,7 +71,7 @@ def sound_seconds(audio, rate=16000):
 CJK = re.compile("[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
 
 
-def syllables(text):
+def syllables(text: str) -> int:
     """Rough syllable count: vowel groups in Latin-script words, one per character in Chinese,
     Japanese and Korean (each is a syllable), about one per 2.5 letters in other scripts.
     Enough to tell "Yes" from "God bless you"."""
@@ -88,61 +90,95 @@ def syllables(text):
     return count
 
 
-def prompt_echo(text):
+def prompt_echo(text: str) -> bool:
     """Whether text only repeats (part of) the style prompt, which Whisper does on near-silence."""
     words = re.sub(r"\W+", " ", text.lower()).strip()
     return bool(PROMPT) and bool(words) and words in re.sub(r"\W+", " ", PROMPT.lower())
 
 
-def plausible(text, audio, rate=16000):
+def plausible(text: str, audio: Any, rate: int = 16000) -> bool:
     """Whether text could have been said in the sound the take contains."""
     if not re.search(r"\w", text) or prompt_echo(text):
         return False
     return syllables(text) / max(sound_seconds(audio, rate), 0.1) <= MAX_SYLLABLE_RATE
 
 
-# Speech model memory: faster-whisper parks the model in RAM (CTranslate2); WhisperCpp frees it.
-def speech_loaded(model):
-    return model.loaded() if hasattr(model, "loaded") else model.model.model_is_loaded
+class SpeechModel(Protocol):
+    """What dictation needs from a speech engine. Segments have .text; info has .language."""
+
+    def transcribe(self, audio: Any, *, language: str | None = None, prompt: str | None = None,
+                   hotwords: str | None = None, vad_filter: bool = True) -> tuple[Iterable[Any], Any]: ...
+
+    def detect_language(self, audio: Any) -> tuple[str, float]: ...
+
+    def loaded(self) -> bool: ...
+
+    def load(self) -> None: ...
+
+    def unload(self, to_cpu: bool = True) -> None:
+        """Free its GPU memory; to_cpu parks it in RAM for a quick reload, where the engine can."""
 
 
-def speech_unload(model):
-    model.unload() if hasattr(model, "unload") else model.model.unload_model(to_cpu=True)
+class FasterWhisperModel:
+    """faster-whisper (CTranslate2) on an NVIDIA GPU or the CPU."""
 
+    def __init__(self, name: str):
+        from faster_whisper import WhisperModel
+        on_cpu = DEVICE == "cpu"
+        self.model = WhisperModel(name, device="cpu" if on_cpu else "cuda",
+                                  compute_type="int8" if on_cpu else "float16")
 
-def speech_load(model):
-    model.load() if hasattr(model, "loaded") else model.model.load_model()
+    def transcribe(self, audio, *, language=None, prompt=None, hotwords=None, vad_filter=True):
+        return self.model.transcribe(audio, language=language, beam_size=1, vad_filter=vad_filter,
+                                     initial_prompt=prompt, hotwords=hotwords)
+
+    def detect_language(self, audio):
+        return self.model.detect_language(audio, vad_filter=True)
+
+    def loaded(self):
+        return self.model.model.model_is_loaded
+
+    def load(self):
+        self.model.model.load_model()
+
+    def unload(self, to_cpu=True):
+        self.model.model.unload_model(to_cpu=to_cpu)
 
 
 class WhisperCpp:
-    """whisper.cpp on a Vulkan GPU (AMD, Intel or NVIDIA), called like faster-whisper's model."""
+    """whisper.cpp on a Vulkan GPU (AMD, Intel or NVIDIA)."""
 
-    def __init__(self, name):
+    def __init__(self, name: str):
         from pywhispercpp.constants import MODELS_DIR
-        from pywhispercpp.model import Model
         from pywhispercpp.utils import redirect_stderr
+        self.name = name
         self.quiet = lambda: redirect_stderr(to=None)  # whisper.cpp logs every call to stderr
-        self.load = lambda: setattr(self, "model", Model(name, print_progress=False, print_realtime=False,
-                                                         redirect_whispercpp_logs_to=None))
         self.load()
         # Without VAD, silence comes out as "." or invented phrases, which would be pasted.
         self.vad_model = os.path.join(MODELS_DIR, os.path.basename(VAD_MODEL_URL))
         if not os.path.exists(self.vad_model):
             download_verified(VAD_MODEL_URL, self.vad_model, VAD_MODEL_SHA256)
 
+    def load(self):
+        from pywhispercpp.model import Model
+        self.model = Model(self.name, print_progress=False, print_realtime=False,
+                           redirect_whispercpp_logs_to=None)
+
     def loaded(self):
         return self.model is not None
 
-    def unload(self):  # whisper.cpp can't park a model in RAM, so it reloads from disk later
+    def unload(self, to_cpu=True):  # whisper.cpp can't park a model in RAM, so it reloads from disk later
         self.model = None
 
-    def detect_language(self, audio, **_):
+    def detect_language(self, audio):
         with self.quiet():
             return self.model.auto_detect_language(audio)[0]
 
-    def transcribe(self, audio, language=None, initial_prompt=None, hotwords=None, **_):
+    def transcribe(self, audio, *, language=None, prompt=None, hotwords=None, vad_filter=True):
+        # whisper.cpp always runs its voice filter (vad_filter is accepted for the shared call):
+        # without it, silence comes out as "." or invented phrases.
         # whisper.cpp has no hotwords; the vocabulary joins the prompt instead.
-        prompt = " ".join(p for p in (initial_prompt, hotwords) if p)
+        prompt = " ".join(p for p in (prompt, hotwords) if p)
         params = {"vad": True, "vad_model_path": self.vad_model}
         if prompt:
             params["initial_prompt"] = prompt
@@ -153,7 +189,7 @@ class WhisperCpp:
             return self.model.transcribe(audio, **params), types.SimpleNamespace(language=language)
 
 
-def download_verified(url, path, sha256, timeout=60):
+def download_verified(url: str, path: str, sha256: str, timeout: float = 60) -> None:
     """Download url to path, refusing a file whose SHA-256 doesn't match: it's loaded as native
     code's input, so a corrupted or swapped file must not be used."""
     with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -165,21 +201,21 @@ def download_verified(url, path, sha256, timeout=60):
     os.replace(path + ".part", path)
 
 
-def default_asr_model():
+def default_asr_model() -> str:
     return {"cpu": CPU_MODEL, "vulkan": VULKAN_MODEL}.get(DEVICE, GPU_MODEL)
 
 
-def asr_model():
+def asr_model() -> str:
     """The speech model picked in the settings menu, else ASR_MODEL, else the engine's default."""
-    return store.settings()["asr_model"] or default_asr_model()
+    return store.settings().asr_model or default_asr_model()
 
 
-def asr_models():
+def asr_models() -> list[tuple[str, str, str]]:
     """The menu's models this engine can run."""
     return [m for m in ASR_MODELS if DEVICE != "vulkan" or not m[0].startswith("distil")]
 
 
-def model_downloaded(name):
+def model_downloaded(name: str) -> bool:
     if DEVICE == "vulkan":
         from pywhispercpp.constants import MODELS_DIR
         return os.path.exists(os.path.join(MODELS_DIR, f"ggml-{name}.bin"))
@@ -190,21 +226,21 @@ def model_downloaded(name):
 GPU_MARGIN_GB = 0.4  # room for the model's working memory on top of its weights
 
 
-def out_of_memory(e):
+def out_of_memory(e: BaseException) -> bool:
     return "out of memory" in str(e).lower()
 
 
-def short_name(name):
+def short_name(name: str) -> str:
     """The menu name of a model given by repo, e.g. large-v3-turbo for the GPU default."""
     return name.split("faster-whisper-")[-1]
 
 
-def model_size(name):
+def model_size(name: str) -> float:
     """A menu model's size in GB, or infinity for one the menu doesn't know."""
     return next((float(m[2].split()[0]) for m in ASR_MODELS if m[0] == short_name(name)), float("inf"))
 
 
-def free_gpu_gb():
+def free_gpu_gb() -> float | None:
     """Free memory on the NVIDIA GPU, or None if nvidia-smi can't tell."""
     try:
         r = subprocess.run(["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
@@ -214,11 +250,11 @@ def free_gpu_gb():
         return None
 
 
-def load_smaller(name, tried=None):
+def load_smaller(name: str, tried: list[str] | None = None) -> tuple[SpeechModel, str] | None:
     """Try each downloaded model smaller than name, largest first, and return the first that
     loads on the GPU as (model, its name), or None. Names tried are added to tried.
     English-only models are tried only when English is set."""
-    english = store.settings()["language"] == "en"
+    english = store.settings().language == "en"
     for cand, _, _ in sorted(asr_models(), key=lambda m: -model_size(m[0])):
         if (model_size(cand) >= model_size(name) or not model_downloaded(cand)
                 or (cand.startswith("distil") and not english)):
@@ -234,36 +270,30 @@ def load_smaller(name, tried=None):
     return None
 
 
-def no_memory_notice(tried):
+def no_memory_notice(tried: list[str]) -> None:
     desktop.notify("Not enough GPU memory to dictate", level="error",
            body=f"Tried {', '.join(tried)}. Close other GPU programs, or set ASR_DEVICE=cpu.")
 
 
-def load_whisper(name):
+def load_whisper(name: str) -> SpeechModel:
     """Load a speech model and run it once. Running needs working memory beyond the weights,
     and on a nearly full GPU that's where it runs out, so the out-of-memory fallbacks must
     see it here, at load time, rather than crash the daemon's start or a take."""
     import numpy as np
     print(f"loading {name} on {DEVICE} ...", flush=True)
-    if DEVICE == "vulkan":
-        model = WhisperCpp(name)
-    else:
-        from faster_whisper import WhisperModel
-        on_cpu = DEVICE == "cpu"
-        model = WhisperModel(name, device="cpu" if on_cpu else "cuda",
-                             compute_type="int8" if on_cpu else "float16")
+    model = WhisperCpp(name) if DEVICE == "vulkan" else FasterWhisperModel(name)
     try:
-        model.transcribe(np.zeros(16000, dtype=np.float32))  # warm-up
+        model.transcribe(np.zeros(16000, dtype=np.float32), vad_filter=False)  # warm-up
     except Exception:
         # Free its GPU memory before a caller tries a smaller one. `del` isn't enough: the
         # traceback being raised keeps the model alive.
         with contextlib.suppress(Exception):
-            model.unload() if hasattr(model, "unload") else model.model.unload_model()
+            model.unload(to_cpu=False)
         raise
     return model
 
 
-def load_model():
+def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
     """Whisper on an NVIDIA GPU (default), on another GPU with ASR_DEVICE=vulkan, or on the CPU
     with ASR_DEVICE=cpu (int8, smaller model). A first use downloads the model; a model that
     won't load falls back to the engine's default instead of failing at every start, and one
