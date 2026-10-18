@@ -1,7 +1,7 @@
 """The dictation daemon: the mic, key presses and holds, and taking turns to paste."""
 import json
+import logging
 import os
-import subprocess
 import threading
 import time
 import traceback
@@ -19,6 +19,8 @@ from tuxwhisper.pipeline import (
     end_status,
 )
 from tuxwhisper.recordings import Recordings
+
+log = logging.getLogger(__name__)
 
 HINT_EVERY = 300  # seconds between lookups of the settings key shown under "Recording…"
 
@@ -39,15 +41,15 @@ class Dictation:
             kbd = UInput({ecodes.EV_KEY: all_keys}, name=f"{store.APP}-keyboard")
         except (UInputError, OSError) as e:  # no udev rule for /dev/uinput: copy instead of typing
             kbd = None
-            print(f"virtual keyboard unavailable ({e}); transcripts go to the clipboard", flush=True)
+            log.info(f"virtual keyboard unavailable ({e}); transcripts go to the clipboard")
             desktop.notify("No virtual keyboard", body="Transcripts are copied instead. Paste them with Ctrl+V.",
                            level="warn")
         d = cls(models, sd, kbd, ecodes)
         d.refresh_hint()
-        d.REPEAT_WINDOW = repeat_window()
+        d.REPEAT_WINDOW = desktop.repeat_window(Dictation.REPEAT_WINDOW)
         threading.Thread(target=d._watch_release, daemon=True).start()
         threading.Thread(target=d._watch_idle, daemon=True).start()
-        print("ready", flush=True)
+        log.info("ready")
         return d
 
     def __init__(self, models, sd, kbd, ec):
@@ -132,7 +134,7 @@ class Dictation:
                 callback=lambda data, *_: self.chunks.append(data.copy()))
             stream.start()
         except Exception as e:  # noqa: BLE001 - unplugged, busy or no mic: stay ready
-            print(f"microphone unavailable: {e}", flush=True)
+            log.info(f"microphone unavailable: {e}")
             desktop.notify("Microphone unavailable", body="Check that it's connected and not in use.",
                            level="error")
             return None
@@ -158,7 +160,7 @@ class Dictation:
             self.stream.stop()
             self.stream.close()
         except Exception as e:  # noqa: BLE001 - e.g. the mic was unplugged mid-take
-            print(f"microphone error on stop: {e}", flush=True)
+            log.info(f"microphone error on stop: {e}")
         finally:
             self.stream = None
         indicator, self.indicator = self.indicator, None
@@ -239,18 +241,6 @@ class Dictation:
             with self.turn:
                 self.serving += 1
                 self.turn.notify_all()
-
-
-def repeat_window():
-    """How soon a second press counts as the key's auto-repeat: the first repeat comes after
-    the desktop's repeat delay (GNOME's default 500 ms), so allow that plus a margin. Users
-    with a longer delay (common for accessibility) would otherwise have a hold cut short."""
-    try:
-        r = subprocess.run(["gsettings", "get", "org.gnome.desktop.peripherals.keyboard", "delay"],
-                           capture_output=True, text=True, timeout=2)
-        return int(r.stdout.split()[-1]) / 1000 + 0.2
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
-        return Dictation.REPEAT_WINDOW
 
 
 def typed_length(text):

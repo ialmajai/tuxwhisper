@@ -1,11 +1,14 @@
 """LLM cleanup of transcripts with a local Ollama model."""
 import json
+import logging
 import os
 import re
 import urllib.error
 import urllib.request
 
 from tuxwhisper import desktop, store
+
+log = logging.getLogger(__name__)
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 
@@ -96,7 +99,7 @@ def warm_rewrite_model() -> bool | None:
     try:
         return rewrite_model_on_gpu()
     except Exception as e:  # noqa: BLE001 - llm_cleanup retries and tells the user
-        print(f"rewrite model preload failed: {e}", flush=True)
+        log.info(f"rewrite model preload failed: {e}")
         return None
 
 
@@ -148,14 +151,14 @@ def llm_cleanup(text: str, lang: str | None, on_gpu: bool | None = None) -> str:
     on_gpu: True when the warm-up just confirmed the model is on the GPU; None checks."""
     try:
         if not (on_gpu or rewrite_model_on_gpu()):
-            print("rewrite skipped: model doesn't fit in GPU memory", flush=True)
+            log.info("rewrite skipped: model doesn't fit in GPU memory")
             desktop.notify("Not enough GPU memory for LLM cleanup; pasted the plain transcript", level="warn")
             return text
         system = REWRITE_SYSTEM.replace("{task}", rewrite_task(text)).replace(
             "{language}", store.LANGUAGES.get(lang, f"the language with code {lang!r}"))
         ctx = context_size(system, text)
         if ctx is None:
-            print(f"rewrite skipped: {len(text)} characters is too long", flush=True)
+            log.info(f"rewrite skipped: {len(text)} characters is too long")
             desktop.notify("Too long for LLM cleanup; pasted the plain transcript",
                            body="Split long dictations into shorter takes.", level="warn")
             return text
@@ -172,13 +175,13 @@ def llm_cleanup(text: str, lang: str | None, on_gpu: bool | None = None) -> str:
         # an input that overflows), used only when both are reported.
         counts = r.get("prompt_eval_count"), r.get("eval_count")
         if r.get("done_reason") == "length" or (all(counts) and sum(counts) >= ctx):
-            print(f"rewrite cut short at {ctx} tokens", flush=True)
+            log.info(f"rewrite cut short at {ctx} tokens")
             desktop.notify("Too long for LLM cleanup; pasted the plain transcript",
                            body="Split long dictations into shorter takes.", level="warn")
             return text
         cleaned = json.loads(r["message"]["content"])["cleaned"].strip()
     except Exception as e:  # noqa: BLE001 - any failure falls back to the plain transcript
-        print(f"rewrite failed: {e}", flush=True)
+        log.info(f"rewrite failed: {e}")
         desktop.notify("LLM cleanup failed; pasted the plain transcript", level="warn")
         return text
     return cleaned or text

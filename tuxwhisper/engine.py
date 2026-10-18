@@ -1,10 +1,10 @@
 """Speech models: faster-whisper or whisper.cpp, loading them and fitting them in GPU memory."""
 import contextlib
 import hashlib
+import logging
 import os
 import re
 import subprocess
-import sys
 import threading
 import time
 import types
@@ -13,6 +13,8 @@ from collections.abc import Iterable
 from typing import Any, Protocol
 
 from tuxwhisper import desktop, store
+
+log = logging.getLogger(__name__)
 
 DEVICE = os.environ.get("ASR_DEVICE", "cuda")  # "cuda", "vulkan" (AMD/Intel GPUs) or "cpu"
 GPU_MODEL = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
@@ -268,7 +270,7 @@ def load_smaller(name: str, tried: list[str] | None = None) -> tuple[SpeechModel
         except RuntimeError as e:
             if not out_of_memory(e):
                 raise
-            print(f"{cand} doesn't fit either", flush=True)
+            log.info(f"{cand} doesn't fit either")
     return None
 
 
@@ -289,7 +291,7 @@ def load_whisper(name: str) -> SpeechModel:
     and on a nearly full GPU that's where it runs out, so the out-of-memory fallbacks must
     see it here, at load time, rather than crash the daemon's start or a take."""
     import numpy as np
-    print(f"loading {name} on {DEVICE} ...", flush=True)
+    log.info(f"loading {name} on {DEVICE} ...")
     model = WhisperCpp(name) if DEVICE == "vulkan" else FasterWhisperModel(name)
     try:
         model.transcribe(np.zeros(16000, dtype=np.float32), vad_filter=False)  # warm-up
@@ -300,6 +302,11 @@ def load_whisper(name: str) -> SpeechModel:
             model.unload(to_cpu=False)
         raise
     return model
+
+
+class ModelUnavailable(Exception):
+    """No speech model can run at all (a missing library, or no usable GPU); the daemon exits
+    with this message rather than retry."""
 
 
 def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
@@ -319,22 +326,22 @@ def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
                                      body=f"<i>{about}Dictation starts when it's ready.</i>")
             model = load_whisper(attempt)
         except ImportError as e:
-            sys.exit(f"{e.name or 'a speech library'} is missing ({e}); run `tuxwhisper setup` "
-                     "(or ./install.sh in a git clone) again")
+            raise ModelUnavailable(f"{e.name or 'a speech library'} is missing ({e}); run `tuxwhisper setup` "
+                                   "(or ./install.sh in a git clone) again") from e
         except Exception as e:
             desktop.close_notification(downloading)
             if DEVICE != "cpu" and out_of_memory(e):
-                print(f"no GPU memory for {attempt} ({e})", flush=True)
+                log.info(f"no GPU memory for {attempt} ({e})")
                 short_of_memory = True
             elif attempt != default:
-                print(f"couldn't load {attempt} ({e}); using {default}", flush=True)
+                log.info(f"couldn't load {attempt} ({e}); using {default}")
                 desktop.notify(f"Couldn't load the speech model {attempt}", level="warn",
                                body=f"Using {default} instead. See the log: journalctl --user -u tuxwhisper")
                 continue
             elif DEVICE != "cpu":
                 desktop.notify("Dictation can't use the GPU", level="error",
                                body="See the log: journalctl --user -u tuxwhisper, or set ASR_DEVICE=cpu.")
-                sys.exit(f"{DEVICE} unavailable ({e}); set ASR_DEVICE=cpu to run on the CPU")
+                raise ModelUnavailable(f"{DEVICE} unavailable ({e}); set ASR_DEVICE=cpu to run on the CPU") from e
             else:
                 raise
         if short_of_memory:  # out of the except block, whose traceback keeps the failed model alive
@@ -343,7 +350,7 @@ def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
                 fallback_notice(found[1], tried[0])
                 return found[0], found[1], tried[0]
             # Exiting would restart the daemon every few seconds; wait for a take instead.
-            print("no GPU memory for any speech model; retrying on the next take", flush=True)
+            log.info("no GPU memory for any speech model; retrying on the next take")
             no_memory_notice(tried)
             return None, None, tried[0]
         if downloading:
@@ -389,9 +396,9 @@ class ModelManager:
             except RuntimeError as e:
                 if not out_of_memory(e):
                     raise
-                print(f"no GPU memory to reload the speech model ({e})", flush=True)
+                log.info(f"no GPU memory to reload the speech model ({e})")
                 return self._step_down(self.fallback_from or self.name, self.name)
-            print(f"speech model reloaded in {time.time() - t0:.2f}s", flush=True)
+            log.info(f"speech model reloaded in {time.time() - t0:.2f}s")
             return True
 
     def _step_down(self, preferred: str, current: str | None = None) -> bool:
@@ -442,7 +449,7 @@ class ModelManager:
             try:
                 if self.model is not None and self.model.loaded():
                     self.model.unload()
-                    print(f"speech model unloaded after {minutes} min idle", flush=True)
+                    log.info(f"speech model unloaded after {minutes} min idle")
             finally:
                 self.lock.release()
 
@@ -457,7 +464,7 @@ class ModelManager:
                 if not out_of_memory(e):
                     raise
                 # The model is loaded, but another program took the GPU memory it needs to run.
-                print(f"no GPU memory to transcribe ({e})", flush=True)
+                log.info(f"no GPU memory to transcribe ({e})")
                 short_of_memory = True
             if short_of_memory:  # out of the except block, whose traceback holds the model's memory
                 self.model.unload()
@@ -468,7 +475,7 @@ class ModelManager:
                 except RuntimeError as e:
                     if not out_of_memory(e):
                         raise
-                    print(f"no GPU memory to transcribe with {self.name} either ({e})", flush=True)
+                    log.info(f"no GPU memory to transcribe with {self.name} either ({e})")
                     no_memory_notice()
                     return None
 
@@ -498,7 +505,7 @@ class ModelManager:
             segments, _ = self._run(audio, lang, english, vad_filter=False)
             retry = " ".join(s.text.strip() for s in segments).strip()
             ok = plausible(retry, audio, store.RATE)
-            print(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})", flush=True)
+            log.info(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})")
             text = retry if ok else ""
         return text, lang
 

@@ -56,6 +56,19 @@ def settings_shortcut() -> str | None:
     return key_label(ours[1]) if ours else None
 
 
+def repeat_window(default: float) -> float:
+    """How soon a second press counts as the key's auto-repeat: the first repeat comes after
+    the desktop's repeat delay (GNOME's default 500 ms), so allow that plus a margin. Users
+    with a longer delay (common for accessibility) would otherwise have a hold cut short.
+    default when the desktop doesn't say."""
+    try:
+        r = subprocess.run(["gsettings", "get", "org.gnome.desktop.peripherals.keyboard", "delay"],
+                           capture_output=True, text=True, timeout=2)
+        return int(r.stdout.split()[-1]) / 1000 + 0.2
+    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, IndexError):
+        return default
+
+
 GNOME_KEYS = {"toggle": "F5", "rewrite": "F3", "save": "F4", "correct": "F6", "settings": "<Alt>F9"}
 KEY_ACTIONS = {"toggle": "Dictate", "rewrite": "Dictate with LLM cleanup",
                "save": "Save the last recording", "settings": "Open this settings menu",

@@ -1,12 +1,13 @@
 """The daemon's socket: the key commands reach the running dictation through it."""
 import fcntl
+import logging
 import os
 import socket
 import sys
 import threading
 import traceback
 
-from tuxwhisper import desktop, store
+from tuxwhisper import desktop, engine, store
 from tuxwhisper.client import sock_path
 from tuxwhisper.daemon import Dictation
 
@@ -20,7 +21,18 @@ def daemon_running(sock: str) -> bool:
         return False
 
 
+def setup_logging() -> None:
+    """TuxWhisper's log as plain lines on stdout, which journald keeps. Only ours: the speech
+    libraries' own info messages would flood it."""
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    log = logging.getLogger(store.APP)
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+
+
 def serve() -> None:
+    setup_logging()
     sock = sock_path()
     # Held for the daemon's lifetime: a second daemon started during the first one's model
     # load (~15 s, before the socket exists) would otherwise steal the socket and orphan it.
@@ -32,7 +44,10 @@ def serve() -> None:
     if daemon_running(sock):  # don't steal the socket from a live daemon
         sys.exit(f"{store.APP} daemon is already running")
     desktop.close_stale_notifications()  # left open by a daemon that crashed or restarted mid-recording
-    d = Dictation.create()
+    try:
+        d = Dictation.create()
+    except engine.ModelUnavailable as e:
+        sys.exit(str(e))
     if os.path.exists(sock):  # stale socket from a daemon that didn't exit cleanly
         os.unlink(sock)
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

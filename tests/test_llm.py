@@ -1,0 +1,76 @@
+"""Tests for the LLM cleanup."""
+
+import pytest
+from conftest import notified
+
+from tuxwhisper import llm, store
+
+
+@pytest.mark.parametrize("minutes, keep_alive", [(30, "30m"), (0, "0m"), (-1, -1)])
+def test_llm_keep_alive(minutes, keep_alive):
+    with open(store.CONFIG, "w") as f:
+        f.write(f"llm_unload_minutes = {minutes}\n")
+    assert llm.llm_keep_alive() == keep_alive
+
+
+@pytest.mark.parametrize("text, cued", [
+    ("let's meet on tuesday no wait wednesday", True),
+    ("send it to john sorry i mean mike", True),
+    ("at four actually make that five", True),
+    ("call you tomorrow or rather friday", True),
+    ("book six scratch that eight", True),
+    ("report dot txt no no report dot md", True),
+    ("what i mean is that the tests are flaky", False),
+    ("is it tuesday or wednesday", False),
+    ("there are no errors in the log", False),
+    ("i actually liked the first version", False),
+])
+def test_self_correction_rule_only_for_correction_cues(text, cued):
+    assert (llm.SELF_CORRECTION in llm.rewrite_task(text)) is cued
+    assert llm.rewrite_task(text).startswith(llm.modes()[llm.current_mode()])
+
+
+def test_context_size_grows_with_the_transcript():
+    assert llm.context_size("x" * 1500, "word " * 50) == 4096
+    assert llm.context_size("x" * 1500, "word " * 700) == 4096
+    assert llm.context_size("x" * 1500, "word " * 1100) == 8192
+    assert llm.context_size("x" * 1500, "word " * 3000) is None
+
+
+@pytest.mark.parametrize("reply", [
+    {"done_reason": "length", "prompt_eval_count": 10, "eval_count": 10},
+    {"done_reason": "stop", "prompt_eval_count": 4070, "eval_count": 30},  # input was trimmed
+])
+def test_cleanup_that_ran_out_of_room_pastes_the_plain_transcript(monkeypatch, reply):
+    monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
+    monkeypatch.setattr(llm, "ollama", lambda path, payload, timeout=30: {
+        **reply, "message": {"content": '{"cleaned": "half of it"}'}})
+    assert llm.llm_cleanup("um the whole take", "en") == "um the whole take"
+    assert notified == ["Too long for LLM cleanup; pasted the plain transcript"]
+
+
+def test_cleanup_without_token_counts_is_kept(monkeypatch):
+    monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
+    monkeypatch.setattr(llm, "ollama", lambda path, payload, timeout=30: {
+        "done_reason": "stop", "prompt_eval_count": 0, "message": {"content": '{"cleaned": "The take."}'}})
+    assert llm.llm_cleanup("um the take", "en") == "The take."
+
+
+def test_far_too_long_take_skips_cleanup(monkeypatch):
+    monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
+    monkeypatch.setattr(llm, "ollama", lambda *a, **k: pytest.fail("should not be called"))
+    text = "word " * 5000
+    assert llm.llm_cleanup(text, "en") == text
+
+
+def test_warm_up_and_cleanup_use_the_same_context():
+    assert llm.OLLAMA_OPTIONS["num_ctx"] == llm.context_size("x" * 1500, "word " * 300)
+
+
+def test_cleanup_trusts_the_warm_up(monkeypatch):
+    def checked():
+        raise AssertionError("checked the GPU again")
+    monkeypatch.setattr(llm, "rewrite_model_on_gpu", checked)
+    monkeypatch.setattr(llm, "ollama", lambda path, payload, timeout=30: {
+        "done_reason": "stop", "message": {"content": '{"cleaned": "The take."}'}})
+    assert llm.llm_cleanup("um the take", "en", on_gpu=True) == "The take."

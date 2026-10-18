@@ -1,4 +1,5 @@
 """One stopped take, from audio to text at the cursor: transcription, cleanup and pasting."""
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -8,6 +9,8 @@ from typing import Any
 
 from tuxwhisper import desktop, engine, llm, store
 from tuxwhisper.recordings import Recordings
+
+log = logging.getLogger(__name__)
 
 # Clipping: samples at full scale, as when speaking too close to the mic or with the gain too high.
 CLIP_LEVEL, CLIP_SHARE, CLIP_WARN_EVERY = 0.99, 0.001, 600  # level, share of samples, seconds
@@ -79,11 +82,11 @@ class TakePipeline:
             return
         text, lang = result
         self.models.touch()
-        print(f"[{len(audio) / store.RATE:.1f}s audio (-{take.excess / store.RATE:.2f}s tail), "
-              f"{time.time() - t0:.2f}s asr] {text!r}", flush=True)
+        log.info(f"[{len(audio) / store.RATE:.1f}s audio (-{take.excess / store.RATE:.2f}s tail), "
+                 f"{time.time() - t0:.2f}s asr] {text!r}")
         missed = missed_speech(len(audio) / store.RATE, text)
         if missed:
-            print(f"  {missed[0]}: {missed[1]}", flush=True)
+            log.info(f"  {missed[0]}: {missed[1]}")
             end_status(status)
             desktop.notify(missed[0], body=missed[1], level="warn")
         if not text:
@@ -116,7 +119,7 @@ class TakePipeline:
         text = llm.llm_cleanup(text, lang, on_gpu=on_gpu)
         timer.cancel()
         timer.join()
-        print(f"  [{time.time() - t0:.2f}s rewrite] {text!r}", flush=True)
+        log.info(f"  [{time.time() - t0:.2f}s rewrite] {text!r}")
         return text
 
     def warn_if_clipped(self, audio):
@@ -124,7 +127,7 @@ class TakePipeline:
         clipped = float((self.np.abs(audio) >= CLIP_LEVEL).mean())
         if clipped > CLIP_SHARE and time.monotonic() - self.last_clip_warning > CLIP_WARN_EVERY:
             self.last_clip_warning = time.monotonic()
-            print(f"  clipping: {clipped:.2%} of samples", flush=True)
+            log.info(f"  clipping: {clipped:.2%} of samples")
             desktop.notify("Your mic is clipping", level="warn",
                            body="Move back a little, or lower its input volume in Settings → Sound.")
 

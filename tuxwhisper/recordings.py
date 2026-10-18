@@ -2,6 +2,7 @@
 import csv
 import datetime
 import errno
+import logging
 import os
 import threading
 import time
@@ -11,6 +12,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from tuxwhisper import desktop, store
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -104,7 +107,6 @@ class Recordings:
                     out.writerow(["file_name", "transcription"])
                 out.writerow([name, text])
             takes, frames = takes + 1, frames + len(audio)
-            store.save_dataset_size(meta, takes, frames)
         seconds = frames / store.RATE
         total = f"{seconds / 60:.0f} min" if seconds >= 60 else f"{seconds:.0f} s"
         if entry:
@@ -112,7 +114,7 @@ class Recordings:
         else:
             store.mark_last_saved(name)
         saved = f"{desktop.plural(takes, 'recording', 'recordings')}, {total}"
-        print(f"saved {name} ({saved})", flush=True)
+        log.info(f"saved {name} ({saved})")
         desktop.notify(f"Saved ({saved})")
 
 
