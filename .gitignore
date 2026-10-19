@@ -13,3 +13,6 @@ dist/
 muse_code_review_oct13.md
 uv.lock
 samples/
+.claude/
+architecture-review.md
+elegance-performance-review.md
