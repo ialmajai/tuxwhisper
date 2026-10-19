@@ -71,6 +71,7 @@ class Dictation:
         self.hint = None  # the settings key shown under "Recording…"; see refresh_hint()
         self.last_hint = -HINT_EVERY
         self.chunks = []
+        self.dropped = 0  # lost-audio count for the take being recorded
         self.last_press = 0.0
         self.held = False
         self.rewrite = False  # the current take's mode, set by the key that started it
@@ -123,6 +124,7 @@ class Dictation:
         self.models.touch()
         threading.Thread(target=self.models.ensure_loaded, daemon=True).start()  # overlaps the speech
         self.chunks = []
+        self.dropped = 0
         self.rewrite = rewrite  # mode is set by the key that started the take
         # A cold load takes seconds, so overlap it with the speech; the cleanup skips its own
         # GPU check when the warm-up confirmed it.
@@ -131,7 +133,7 @@ class Dictation:
         try:
             stream = self.sd.InputStream(
                 samplerate=store.RATE, channels=1, dtype="float32",
-                callback=lambda data, *_: self.chunks.append(data.copy()))
+                callback=self._capture)
             stream.start()
         except Exception as e:  # noqa: BLE001 - unplugged, busy or no mic: stay ready
             log.info(f"microphone unavailable: {e}")
@@ -140,6 +142,13 @@ class Dictation:
             return None
         self.stream, self.indicator = stream, None
         return stream
+
+    def _capture(self, data, frames=None, time_info=None, status=None):
+        """The mic's callback: keep each block, and count lost audio, which would otherwise only
+        show as a worse transcript."""
+        if status and status.input_overflow:
+            self.dropped += 1
+        self.chunks.append(data.copy())
 
     def _announce(self, stream, rewrite):
         """Show "Recording…" outside self.lock: notify-send -p can take a while, and holding the
@@ -168,7 +177,8 @@ class Dictation:
         chunks, self.chunks = self.chunks, []
         # This take's own mode: the next take may start before this one is pasted.
         ticket, self.next_ticket = self.next_ticket, self.next_ticket + 1
-        return TakeContext(chunks, excess, self.rewrite, self.warming, ticket, indicator)
+        return TakeContext(chunks, excess, self.rewrite, self.warming, ticket, indicator,
+                           dropped=self.dropped)
 
     def toggle(self, cut_at=None, rewrite=False):
         with self.lock:

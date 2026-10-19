@@ -534,3 +534,39 @@ def test_settings_key_is_looked_up_at_most_every_few_minutes(monkeypatch):
     for _ in range(3):
         d.pipeline.run(pipeline.TakeContext([burst(1)[:, None]]))
     assert looked == [1]
+
+
+# --- a stuck cleanup, lost audio, and the take's timing ---------------------------------------
+
+def test_stuck_cleanup_pastes_the_plain_transcript_after_the_deadline(monkeypatch):
+    d = make_dictation(monkeypatch)
+    release = threading.Event()
+    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None: release.wait(5) and "late")
+    monkeypatch.setattr(pipeline, "cleanup_deadline", lambda text: 0.2)
+    d.toggle(rewrite=True)
+    d.toggle()
+    release.set()
+    assert d.pasted == ["take1"]  # not held up, not cleaned
+    assert "LLM cleanup took too long; pasted the plain transcript" in notified
+
+
+def test_cleanup_deadline_grows_with_the_text():
+    assert pipeline.cleanup_deadline("short") == 15
+    assert pipeline.cleanup_deadline("x" * 2000) == 25
+
+
+def test_lost_audio_is_counted_and_reported(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.toggle()
+    d._capture(np.zeros((160, 1), dtype=np.float32), 160, None, types.SimpleNamespace(input_overflow=True))
+    d.toggle()
+    assert "Some audio was lost while recording" in notified
+    assert d.pasted == ["take1"]  # still transcribed and pasted
+
+
+def test_take_logs_its_stage_timings(monkeypatch, caplog):
+    d = make_dictation(monkeypatch)
+    with caplog.at_level("INFO", logger="tuxwhisper"):
+        d.toggle()
+        d.toggle()
+    assert any("timing: transcribe" in r.message and "from stop to pasted" in r.message for r in caplog.records)

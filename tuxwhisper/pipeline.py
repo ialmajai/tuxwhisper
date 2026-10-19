@@ -3,7 +3,8 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -36,6 +37,12 @@ def end_status(status):
         desktop.close_notification(status.pop())
 
 
+def cleanup_deadline(text):
+    """Seconds to wait for the LLM cleanup, including a cold model load: longer takes take
+    longer to rewrite (about 1 s per 60 words once loaded)."""
+    return 15 + len(text) // 200
+
+
 @dataclass
 class TakeContext:
     """Everything one take needs, captured when its recording stops: the next take may start
@@ -47,6 +54,8 @@ class TakeContext:
     ticket: int = 0  # its turn: takes are pasted in the order they stopped
     indicator: str | None = None  # the "Recording…" notification, which becomes "Transcribing…"
     status: Status = field(default_factory=Status)  # the "Transcribing…" notification
+    dropped: int = 0  # times the sound system lost audio while recording (input overflow)
+    stopped_at: float = field(default_factory=time.monotonic)  # for the take's timing log
 
     def audio(self, np):
         audio = np.concatenate(self.chunks)[:, 0] if self.chunks else []
@@ -65,6 +74,8 @@ class TakePipeline:
         self.models, self.paster, self.recordings = models, paster, recordings
         self.after_paste = after_paste
         self.last_clip_warning = -CLIP_WARN_EVERY
+        # Cleanups run here, so a slow one can be given up on without stopping it mid-request.
+        self.cleanups = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tuxwhisper-cleanup")
 
     def run(self, take: TakeContext) -> None:
         """Transcribe one take, clean it up if asked, and paste it. take.status holds its
@@ -74,6 +85,11 @@ class TakePipeline:
             return
         # Read the clipboard to restore after the paste while the take transcribes.
         snapshot = self.paster.snapshot_clipboard() if self.paster.kbd is not None else None
+        if take.dropped:
+            log.info(f"  audio lost {take.dropped} times while recording (input overflow)")
+            desktop.notify("Some audio was lost while recording",
+                           body="The transcript may be missing words. Try again, or close busy programs.",
+                           level="warn")
         if not self.models.ensure_loaded():
             return
         t0 = time.time()
@@ -91,12 +107,18 @@ class TakePipeline:
             desktop.notify(missed[0], body=missed[1], level="warn")
         if not text:
             return
+        t_asr = time.time() - t0
         kept = self.recordings.keep(audio, text)  # saved takes keep Whisper's text, matching the audio
+        t1 = time.time()
         if take.rewrite:
             text = self.clean_up(text, lang, take.warming, status)
+        t_cleanup = time.time() - t1
         text = store.apply_replacements(text)
         end_status(status)
+        t2 = time.time()
         typed = self.paster.paste(text + " ", snapshot)
+        log.info(f"  timing: transcribe {t_asr:.2f}s, cleanup {t_cleanup:.2f}s, paste {time.time() - t2:.2f}s;"
+                 f" {time.monotonic() - take.stopped_at:.2f}s from stop to pasted")
         kept.entry = store.add_history(text, rewritten=take.rewrite, typed=typed)  # only a typed take can be retyped
         self.warn_if_clipped(audio)
         self.after_paste()
@@ -113,10 +135,19 @@ class TakePipeline:
             status[:] = [nid]
         timer = threading.Timer(0.8, cleaning)
         timer.start()
-        on_gpu = None  # not known: llm_cleanup checks
-        if warming:
-            on_gpu = True if warming.result() is True else None  # a failed warm-up is checked again
-        text = llm.llm_cleanup(text, lang, on_gpu=on_gpu)
+        def run():
+            on_gpu = None  # not known: llm_cleanup checks
+            if warming:
+                on_gpu = True if warming.result() is True else None  # a failed warm-up is checked again
+            return llm.llm_cleanup(text, lang, on_gpu=on_gpu)
+        # Takes paste in order, so a stuck cleanup would hold up every take after it: give up
+        # after a deadline and paste the plain text (the request finishes, unused, on its own).
+        try:
+            text = self.cleanups.submit(run).result(timeout=cleanup_deadline(text))
+        except FutureTimeout:
+            log.info(f"  rewrite gave up after {cleanup_deadline(text)}s")
+            desktop.notify("LLM cleanup took too long; pasted the plain transcript",
+                           body="Ollama may still be loading the model. Try again in a moment.", level="warn")
         timer.cancel()
         timer.join()
         log.info(f"  [{time.time() - t0:.2f}s rewrite] {text!r}")
