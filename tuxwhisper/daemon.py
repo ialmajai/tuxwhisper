@@ -23,6 +23,7 @@ from tuxwhisper.pipeline import (
     end_status,
 )
 from tuxwhisper.recordings import Recordings
+from tuxwhisper.streaming import LongTake
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ class Dictation:
         self.last_hint = -HINT_EVERY
         self.chunks = []
         self.dropped = 0  # lost-audio count for the take being recorded
+        self.long: LongTake | None = None  # the take being recorded, transcribed while it runs long
         self.last_press = 0.0
         self.held = False
         self.rewrite = False  # the current take's mode, set by the key that started it
@@ -145,6 +147,10 @@ class Dictation:
                            level="error")
             return None
         self.stream, self.indicator = stream, None
+        settings = store.settings()
+        if settings.stream_long_takes and self.models.can_stream():
+            self.long = LongTake(self.models, self.chunks, settings)
+            self.long.start()
         return stream
 
     def _capture(self, data, frames=None, time_info=None, status=None):
@@ -179,10 +185,13 @@ class Dictation:
         indicator, self.indicator = self.indicator, None
         desktop.sound("device-removed")
         chunks, self.chunks = self.chunks, []
+        long, self.long = self.long, None
+        if long is not None:
+            long.stop()  # the take's pipeline waits for a pass under way
         # This take's own mode: the next take may start before this one is pasted.
         ticket, self.next_ticket = self.next_ticket, self.next_ticket + 1
         return TakeContext(chunks, excess, self.rewrite, self.warming, ticket, indicator,
-                           dropped=self.dropped)
+                           dropped=self.dropped, long=long)
 
     def toggle(self, cut_at=None, rewrite=False):
         with self.lock:

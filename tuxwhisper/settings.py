@@ -24,6 +24,9 @@ class Settings:
     asr_unload_minutes: int = 30
     llm_unload_minutes: int = 30
     mode_models: dict[str, str] = field(default_factory=dict)  # cleanup style -> its own LLM
+    # Transcribe takes over 20 s in parts while they're still being recorded, so the text comes
+    # sooner after the key's release.
+    stream_long_takes: bool = True
 
     @classmethod
     def from_config(cls, raw: Mapping[str, Any], env: Mapping[str, str] = os.environ) -> "Settings":
@@ -33,7 +36,7 @@ class Settings:
              "language": env.get("ASR_LANGUAGE") or "", "paste_key": env.get("ASR_PASTE_KEY", "shift+insert"),
              "rewrite_model": env.get("ASR_REWRITE_MODEL", "llama3.2"), "mode": "Clean up",
              "asr_model": env.get("ASR_MODEL", ""), "asr_unload_minutes": 30, "llm_unload_minutes": 30,
-             "mode_models": {}}
+             "mode_models": {}, "stream_long_takes": env.get("ASR_STREAM", "1") != "0"}
         s.update({k: v for k, v in raw.items() if k in s})
         try:
             s["sound_volume"] = min(max(int(s["sound_volume"]), 0), 100)
@@ -46,6 +49,8 @@ class Settings:
         for key, low in (("asr_unload_minutes", 0), ("llm_unload_minutes", -1)):
             if not isinstance(s[key], int) or isinstance(s[key], bool) or s[key] < low:
                 s[key] = 30
+        if not isinstance(s["stream_long_takes"], bool):
+            s["stream_long_takes"] = True
         if s["language"] not in LANGUAGES:  # also catches a wrong type from a hand-edited config
             s["language"] = ""
         return cls(**s)

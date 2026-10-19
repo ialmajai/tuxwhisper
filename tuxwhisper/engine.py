@@ -110,8 +110,16 @@ def plausible(text: str, audio: Any, rate: int = 16000) -> bool:
 class SpeechModel(Protocol):
     """What dictation needs from a speech engine. Segments have .text; info has .language."""
 
+    # Whether segments carry .words with .word, .start and .end (seconds) when asked for them,
+    # which transcribing long takes in parts while they're recorded needs.
+    word_timestamps: bool
+
     def transcribe(self, audio: Any, *, language: str | None = None, prompt: str | None = None,
-                   hotwords: str | None = None, vad_filter: bool = True) -> tuple[Iterable[Any], Any]: ...
+                   hotwords: str | None = None, vad_filter: bool = True,
+                   word_timestamps: bool = False, fallback: bool = True) -> tuple[Iterable[Any], Any]:
+        """fallback: decode again, sampling, when the text looks wrong (repeats itself, or is
+        unlikely), as Whisper does; each try can take as long as the first, or longer."""
+        ...
 
     def detect_language(self, audio: Any) -> tuple[str, float]: ...
 
@@ -125,6 +133,7 @@ class SpeechModel(Protocol):
 
 class FasterWhisperModel:
     """faster-whisper (CTranslate2) on an NVIDIA GPU or the CPU."""
+    word_timestamps = True
 
     def __init__(self, name: str):
         from faster_whisper import WhisperModel
@@ -132,9 +141,11 @@ class FasterWhisperModel:
         self.model = WhisperModel(name, device="cpu" if on_cpu else "cuda",
                                   compute_type="int8" if on_cpu else "float16")
 
-    def transcribe(self, audio, *, language=None, prompt=None, hotwords=None, vad_filter=True):
+    def transcribe(self, audio, *, language=None, prompt=None, hotwords=None, vad_filter=True,
+                   word_timestamps=False, fallback=True):
         return self.model.transcribe(audio, language=language, beam_size=1, vad_filter=vad_filter,
-                                     initial_prompt=prompt, hotwords=hotwords)
+                                     initial_prompt=prompt, hotwords=hotwords, word_timestamps=word_timestamps,
+                                     **({} if fallback else {"temperature": 0.0}))
 
     def detect_language(self, audio):
         return self.model.detect_language(audio, vad_filter=True)
@@ -151,6 +162,7 @@ class FasterWhisperModel:
 
 class WhisperCpp:
     """whisper.cpp on a Vulkan GPU (AMD, Intel or NVIDIA)."""
+    word_timestamps = False  # pywhispercpp's segments have none: long takes are transcribed whole
 
     def __init__(self, name: str):
         from pywhispercpp.constants import MODELS_DIR
@@ -178,7 +190,8 @@ class WhisperCpp:
         with self.quiet():
             return self.model.auto_detect_language(audio)[0]
 
-    def transcribe(self, audio, *, language=None, prompt=None, hotwords=None, vad_filter=True):
+    def transcribe(self, audio, *, language=None, prompt=None, hotwords=None, vad_filter=True,
+                   word_timestamps=False, fallback=True):
         # whisper.cpp always runs its voice filter (vad_filter is accepted for the shared call):
         # without it, silence comes out as "." or invented phrases.
         # whisper.cpp has no hotwords; the vocabulary joins the prompt instead.
@@ -453,6 +466,42 @@ class ModelManager:
             finally:
                 self.lock.release()
 
+    def can_stream(self) -> bool:
+        """Whether long takes can be transcribed in parts while they're recorded: the model in use
+        gives word timestamps, which say where agreed words end."""
+        return bool(getattr(self.model, "word_timestamps", False))
+
+    def transcribe_part(self, audio: Any, settings: "store.Settings", lang: str | None,
+                        context: str = "", fallback: bool = True) -> tuple[list[tuple[str, float, float]], str] | None:
+        """One pass over part of a long take, with word timestamps: ([(word, start, end)], language),
+        times in seconds from the part's start and words as Whisper spells them (with their
+        leading space). lang None picks the language and prompt as for a whole take; otherwise
+        context, the take's text so far, is the prompt (Whisper continues its style and
+        vocabulary), else the take's usual one. fallback: see SpeechModel.transcribe. None if it
+        can't run: no model loaded, or no GPU memory, where the whole take is transcribed instead
+        (and steps down to a smaller model); nothing is said here, as the user isn't waiting on
+        it. No retry without the voice filter: that's for short whispered takes."""
+        with self.lock:
+            if self.model is None or not self.model.loaded():
+                return None
+            try:
+                if lang is None:
+                    segments, lang, _ = self._first_pass(audio, settings, word_timestamps=True, fallback=fallback)
+                else:
+                    english = lang == "en"
+                    segments, _ = self.model.transcribe(
+                        audio, language=lang, vad_filter=True, word_timestamps=True, fallback=fallback,
+                        prompt=context or (PROMPT if english else None),
+                        hotwords=store.vocab() if english else None)
+                words = [(w.word, w.start, w.end) for s in segments for w in (s.words or [])]
+            except RuntimeError as e:
+                if not out_of_memory(e):
+                    raise
+                log.info(f"  no GPU memory for a part ({e}); the take will be transcribed whole")
+                return None
+        self.touch()
+        return words, lang
+
     def transcribe(self, audio: Any, settings: "store.Settings") -> tuple[str, str] | None:
         """The take's (text, language); None if the GPU has no memory for any model (the user
         has been told). Out of memory while running, it steps down to a smaller model once."""
@@ -482,20 +531,7 @@ class ModelManager:
     def _transcribe(self, audio, settings):
         """(text, language) (under self.lock), with whispered takes retried without the voice
         filter."""
-        lang = settings.language or None  # "" is automatic
-        # The English prompt and vocabulary make Whisper translate other languages into English.
-        # With no language set, guess the prompt from the last take's language and let Whisper
-        # detect it in the same pass: one transcription instead of a detection and then one.
-        english = (lang or self.last_lang) == "en"
-        segments, info = self._run(audio, lang, english, vad_filter=True)
-        if not lang:
-            lang = getattr(info, "language", None)
-            if lang is None:  # a model that doesn't report it: detect, as a separate pass
-                lang = self.model.detect_language(audio)[0]
-            if (lang == "en") != english:  # guessed the wrong prompt: redo with the right one
-                english = lang == "en"
-                segments, _ = self._run(audio, lang, english, vad_filter=True)
-            self.last_lang = lang
+        segments, lang, english = self._first_pass(audio, settings)
         text = " ".join(s.text.strip() for s in segments).strip()
         if (not text and sound_seconds(audio, store.RATE) >= MIN_SOUND
                 and len(audio) <= RETRY_MAX_SECONDS * store.RATE):
@@ -509,8 +545,27 @@ class ModelManager:
             text = retry if ok else ""
         return text, lang
 
-    def _run(self, audio, lang, english, vad_filter):
+    def _first_pass(self, audio, settings, **kw):
+        """(segments, language, English or not) with the language set, or detected (under
+        self.lock); kw goes to the model."""
+        lang = settings.language or None  # "" is automatic
+        # The English prompt and vocabulary make Whisper translate other languages into English.
+        # With no language set, guess the prompt from the last take's language and let Whisper
+        # detect it in the same pass: one transcription instead of a detection and then one.
+        english = (lang or self.last_lang) == "en"
+        segments, info = self._run(audio, lang, english, vad_filter=True, **kw)
+        if not lang:
+            lang = getattr(info, "language", None)
+            if lang is None:  # a model that doesn't report it: detect, as a separate pass
+                lang = self.model.detect_language(audio)[0]
+            if (lang == "en") != english:  # guessed the wrong prompt: redo with the right one
+                english = lang == "en"
+                segments, _ = self._run(audio, lang, english, vad_filter=True, **kw)
+            self.last_lang = lang
+        return segments, lang, english
+
+    def _run(self, audio, lang, english, vad_filter, **kw):
         """(segments, info) from the model; lang None detects the language."""
         return self.model.transcribe(audio, language=lang, vad_filter=vad_filter,
                                      prompt=PROMPT if english else None,
-                                     hotwords=store.vocab() if english else None)
+                                     hotwords=store.vocab() if english else None, **kw)

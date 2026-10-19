@@ -10,6 +10,7 @@ from typing import Any
 
 from tuxwhisper import desktop, engine, llm, store
 from tuxwhisper.recordings import Recordings
+from tuxwhisper.streaming import LongTake
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class TakeContext:
     status: Status = field(default_factory=Status)  # the "Transcribing…" notification
     dropped: int = 0  # times the sound system lost audio while recording (input overflow)
     stopped_at: float = field(default_factory=time.monotonic)  # for the take's timing log
+    long: LongTake | None = None  # its passes while it was recorded, if it may run long
 
     def audio(self, np):
         audio = np.concatenate(self.chunks)[:, 0] if self.chunks else []
@@ -93,7 +95,8 @@ class TakePipeline:
         if not self.models.ensure_loaded():
             return
         t0 = time.time()
-        result = self.models.transcribe(audio, store.settings())
+        streamed = self.finish_long_take(take, audio)
+        result = (streamed, take.long.lang) if streamed else self.models.transcribe(audio, store.settings())
         if result is None:
             return
         text, lang = result
@@ -117,11 +120,24 @@ class TakePipeline:
         end_status(status)
         t2 = time.time()
         typed = self.paster.paste(text + " ", snapshot)
-        log.info(f"  timing: transcribe {t_asr:.2f}s, cleanup {t_cleanup:.2f}s, paste {time.time() - t2:.2f}s;"
+        parts = f" ({take.long.passes} passes while speaking, {take.long.tail:.1f}s tail)" if streamed else ""
+        log.info(f"  timing: transcribe {t_asr:.2f}s{parts}, cleanup {t_cleanup:.2f}s, paste {time.time() - t2:.2f}s;"
                  f" {time.monotonic() - take.stopped_at:.2f}s from stop to pasted")
         kept.entry = store.add_history(text, rewritten=take.rewrite, typed=typed)  # only a typed take can be retyped
         self.warn_if_clipped(audio)
         self.after_paste()
+
+    def finish_long_take(self, take: TakeContext, audio) -> str | None:
+        """The text of a take transcribed in passes while it was recorded; None to transcribe it
+        whole, as when it wasn't (a short take) or that failed. Whispered speech, missed speech,
+        cleanup and the rest work on the whole take either way."""
+        if take.long is None:
+            return None
+        try:
+            return take.long.finish(audio)
+        except Exception:  # the whole take is transcribed instead
+            log.exception("  last pass failed; transcribing the take whole")
+            return None
 
     def clean_up(self, text, lang, warming, status):
         """The LLM's cleanup of text; the plain text if it fails (llm says so)."""

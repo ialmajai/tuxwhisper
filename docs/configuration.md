@@ -47,6 +47,7 @@ priority for the rest. Add variables to the `[Service]` section of
 | `ASR_MODEL` | `large-v3-turbo` (GPU), `small` (CPU) | Any faster-whisper model name or path; the settings menu's **Speech model** overrides it |
 | `ASR_PROMPT` | a short punctuated sentence | Style example for Whisper; keeps capitals and punctuation. Used for English only. Set to empty to disable. |
 | `ASR_SOUNDS` | `1` | `0` turns off the start and stop sounds |
+| `ASR_STREAM` | `1` | `0` transcribes long takes only after the key's release, rather than in parts while you speak |
 | `ASR_SOUND_VOLUME` | `40` | Sound volume, as a percent of the system volume |
 | `ASR_PASTE_KEY` | `shift+insert` | `shift+insert`, `ctrl+v` or `ctrl+shift+v` |
 | `ASR_REWRITE_MODEL` | `llama3.2` | Ollama model used for LLM cleanup |
