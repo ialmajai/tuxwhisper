@@ -21,7 +21,8 @@ local alternative to dictation apps such as Wispr Flow and superwhisper.
 
 - **Fast:** OpenAI's open Whisper model ([faster-whisper](https://github.com/SYSTRAN/faster-whisper))
   types your words about half a second after you release the key, with an NVIDIA GPU. AMD
-  and Intel GPUs work through Vulkan.
+  and Intel GPUs work through Vulkan. On NVIDIA and the CPU, long dictations are
+  transcribed in parts while you speak, so a minute-long one also appears within a second or two.
 - **Types anywhere:** browsers, editors, terminals, on X11 and Wayland (including GNOME).
 - **LLM cleanup (optional):** the cleanup key runs your words through a local [Ollama](https://ollama.com)
   model (Meta's Llama 3.2 by default) that removes "um"s and fixes punctuation, or rewrites
