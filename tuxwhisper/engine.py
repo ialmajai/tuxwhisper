@@ -51,6 +51,9 @@ PROMPT = os.environ.get("ASR_PROMPT", "Hello. This is a sentence, with punctuati
 # checking the transcript could have been said in the sound there is.
 MIN_SOUND = 0.2       # seconds of sound before a take counts as more than silence
 MAX_SYLLABLE_RATE = 8  # syllables per second of sound; fast speech is about 6-7
+# A heard take's text is only doubted beyond this: the count is rough, and a fast speaker's
+# real words must never be lost. A made-up sentence on a near-silent take is far beyond it.
+MADE_UP_RATE = 14
 # Frame levels (RMS) bounding the sound threshold. The floor keeps digital silence with a click
 # from counting as sound; it sits below a quiet mic's own hiss (about 6e-5 here, three times that
 # is the usual threshold), since whispers peak at only 2e-3. The cap keeps a take that is sound
@@ -100,11 +103,11 @@ def prompt_echo(text: str) -> bool:
     return bool(PROMPT) and bool(words) and words in re.sub(r"\W+", " ", PROMPT.lower())
 
 
-def plausible(text: str, audio: Any, rate: int = 16000) -> bool:
+def plausible(text: str, audio: Any, rate: int = 16000, limit: float = MAX_SYLLABLE_RATE) -> bool:
     """Whether text could have been said in the sound the take contains."""
     if not re.search(r"\w", text) or prompt_echo(text):
         return False
-    return syllables(text) / max(sound_seconds(audio, rate), 0.1) <= MAX_SYLLABLE_RATE
+    return syllables(text) / max(sound_seconds(audio, rate), 0.1) <= limit
 
 
 class SpeechModel(Protocol):
@@ -544,7 +547,7 @@ class ModelManager:
             log.info(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})")
             text = retry if ok else ""
         elif (text and english and PROMPT and len(audio) <= RETRY_MAX_SECONDS * store.RATE
-                and not plausible(text, audio, store.RATE)):
+                and not plausible(text, audio, store.RATE, MADE_UP_RATE)):
             # More words than the sound could hold: Whisper made up a sentence, typically a
             # rewording of its style prompt on a short or unclear take. Retry without the prompt.
             segments, _ = self._run(audio, lang, False, vad_filter=True)

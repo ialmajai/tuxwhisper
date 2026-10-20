@@ -405,6 +405,15 @@ def test_made_up_sentence_is_retried_without_the_prompt(monkeypatch, without_pro
     assert ("Didn't catch that" in notified) is (not typed)
 
 
+def test_fast_speech_is_not_retried_without_the_prompt(monkeypatch):
+    d = make_dictation(monkeypatch)
+    said = "I'll repeat the repository till the very end."  # 15 counted syllables in 1.7 s
+    d.models.model.transcribe = lambda audio, prompt=None, **_: (
+        [types.SimpleNamespace(text=said if prompt else "repository till the very end.")], None)
+    d.pipeline.run(pipeline.TakeContext([burst(1.7)[:, None]]))
+    assert d.pasted == [said]
+
+
 def test_silence_is_not_retried(monkeypatch):
     d = make_dictation(monkeypatch)
     d.models.model = WhisperedModel("You")
