@@ -100,7 +100,7 @@ def test_long_take_passes_while_recording_and_finishes_the_rest_at_the_stop(monk
     assert d.models.model.calls[0].start == 0 and d.models.model.calls[0].end >= 20 * RATE  # not before 20 s
     d.pipeline.run(take)
     last = d.models.model.calls[passes:]
-    assert [(c.start, c.end, c.fallback) for c in last] == [(long.committed, 50 * RATE, True)]  # only the rest
+    assert [(c.start, c.end, c.fallback) for c in last] == [(long.pass_start(), 50 * RATE, True)]  # only the rest
     assert d.pasted == [text_of(script)]
 
 
@@ -148,6 +148,24 @@ def test_misheard_last_words_are_redone_by_the_last_pass(monkeypatch):
     assert take.long.committed < int(script[-3][1] * RATE)  # still provisional at the stop
     d.pipeline.run(take)
     assert d.pasted == [text_of(script)]
+
+
+class LateModel(ScriptModel):
+    """Gives every word's timestamps 0.2 s late, as Whisper can: a cut at a word's reported
+    end falls inside the next word."""
+    def transcribe(self, audio, **kw):
+        segments, info = super().transcribe(audio, **kw)
+        for w in segments[0].words:
+            w.start, w.end = w.start + 0.2, w.end + 0.2
+        return segments, info
+
+
+def test_word_after_a_cut_with_late_timestamps_is_not_clipped(monkeypatch):
+    script = speech(40)  # no pauses: every cut is at a word's reported end
+    d, take = long_take(monkeypatch, LateModel(script), 40)
+    assert take.long.passes and take.long.words
+    d.pipeline.run(take)
+    assert d.pasted == [text_of(script)]  # nothing lost at the cuts, and nothing heard twice
 
 
 class FickleModel(ScriptModel):

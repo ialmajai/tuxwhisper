@@ -19,6 +19,11 @@ PASS_EVERY = 2     # seconds of new audio between passes (and never two at once)
 FORCE_AFTER = 27
 MAX_WINDOW = 30
 PAUSE = 0.4        # seconds between words that count as a pause: a safe place to cut
+# Seconds each pass starts before the agreed words end. Word timestamps can be late, and a pass
+# starting at the last word's end would clip the next word ("wouldn't" heard as "ouldn't");
+# words heard again in the overlap are dropped (see repeated()).
+OVERLAP = 0.5
+SLACK = 0.2  # seconds past the cut a word heard again in the overlap may be said to start
 CONTEXT_CHARS = 200  # the end of the text so far, given as the prompt for the next pass
 TICK = 0.25        # seconds between checks for enough new audio
 
@@ -43,6 +48,17 @@ def pause_after(words: list, i: int) -> bool:
     return i + 1 < len(words) and words[i + 1][1] - words[i][2] >= PAUSE * store.RATE
 
 
+def repeated(kept: list, words: list, cut: int) -> int:
+    """How many of a pass's first words were heard again in the overlap: they repeat the last
+    kept ones and start before the cut (give or take; timestamps there are rough). A phrase
+    the speaker really repeated runs on past the cut."""
+    for n in range(min(5, len(kept), len(words)), 0, -1):
+        if (words[n - 1][1] < cut + SLACK * store.RATE
+                and [normal(w) for w, _, _ in kept[-n:]] == [normal(w) for w, _, _ in words[:n]]):
+            return n
+    return 0
+
+
 def joined(words: list) -> str:
     """Words as Whisper spells them, each with its own leading space (none in Chinese or Japanese)."""
     return "".join(w for w, _, _ in words).strip()
@@ -58,7 +74,7 @@ class LongTake:
         mic's callback keeps adding to; settings: the take's store.Settings."""
         self.models, self.chunks, self.settings = models, chunks, settings
         self.words = []       # agreed: kept for the final text
-        self.committed = 0    # where the agreed words end: the next pass starts here
+        self.committed = 0    # where the agreed words end: the next pass starts just before
         self.hypothesis = []  # the last pass's words after the agreed ones, still provisional
         self.lang = settings.language or None  # else the first pass that hears words decides it
         self.failed = False
@@ -100,17 +116,17 @@ class LongTake:
         rate = store.RATE
         if len(audio) - self.committed > FORCE_AFTER * rate:
             self.force_commit()
-        if not self.failed and len(audio) - self.committed > MAX_WINDOW * rate:
+        if not self.failed and len(audio) - self.pass_start() > MAX_WINDOW * rate:
             log.info("  no place to cut within Whisper's window; the take will be transcribed whole")
             self.failed = True
         if self.failed:
             return
         t0 = time.time()
-        window = (len(audio) - self.committed) / rate
+        window = (len(audio) - self.pass_start()) / rate
         # Not decoded again when the text looks wrong: a short window sometimes comes out as one
         # phrase repeated, and its retries took 25 s instead of 2 on the CPU, which a release
         # would wait for. A wrong pass just doesn't agree with the next one.
-        words = self.transcribe(audio[self.committed:], fallback=False)
+        words = self.transcribe(audio, fallback=False)
         if words is None:
             self.failed = True
             return
@@ -120,17 +136,23 @@ class LongTake:
         log.info(f"  pass {self.passes}: {window:.1f} s in {time.time() - t0:.2f}s → {len(words)} words, "
                  f"{agreed} agreed; {len(self.words)} kept, to {self.committed / rate:.1f} s")
 
+    def pass_start(self) -> int:
+        """Where the next pass starts: a little before the agreed words end (OVERLAP)."""
+        return max(0, self.committed - int(OVERLAP * store.RATE))
+
     def transcribe(self, audio, fallback=True) -> list | None:
-        """The words in audio, which starts where the agreed words end; None if the model
+        """The words after the agreed ones in audio, the take so far; None if the model
         couldn't run."""
-        result = self.models.transcribe_part(audio, self.settings, self.lang, self.context(), fallback)
+        base = self.pass_start()
+        result = self.models.transcribe_part(audio[base:], self.settings, self.lang, self.context(), fallback)
         if result is None:
             return None
         words, lang = result
         if words and self.lang is None:
             self.lang = lang  # every later pass keeps it: a part may be too short to tell
-        rate, base = store.RATE, self.committed
-        return [(w, base + int(start * rate), base + int(end * rate)) for w, start, end in words]
+        rate = store.RATE
+        words = [(w, base + int(start * rate), base + int(end * rate)) for w, start, end in words]
+        return words[repeated(self.words, words, self.committed):]
 
     def context(self) -> str:
         """The end of the agreed text, from a word's start: Whisper continues its style."""
@@ -177,11 +199,10 @@ class LongTake:
             self.thread.join()
         if self.failed or not joined(self.words):
             return None
-        tail = audio[self.committed:]
-        self.tail = len(tail) / store.RATE
+        self.tail = (len(audio) - self.committed) / store.RATE
         rest = ""
-        if len(tail) >= 0.3 * store.RATE:  # shorter is no speech, and Whisper invents some
-            words = self.transcribe(tail)
+        if self.tail >= 0.3:  # shorter is no speech, and Whisper invents some
+            words = self.transcribe(audio)
             if words is None:
                 return None
             rest = joined(words)
