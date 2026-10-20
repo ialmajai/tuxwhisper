@@ -9,7 +9,11 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from tuxwhisper import desktop, engine, llm, store
-from tuxwhisper.client import request, send, sock_path  # noqa: F401 - re-exported for menu and tests
+from tuxwhisper.client import (  # noqa: F401 - re-exported for menu and tests
+    request,
+    send,
+    sock_path,
+)
 from tuxwhisper.pipeline import (
     MIC_ICON,
     Paster,
