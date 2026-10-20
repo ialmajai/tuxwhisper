@@ -543,6 +543,16 @@ class ModelManager:
             ok = plausible(retry, audio, store.RATE)
             log.info(f"  no voice found; without the filter: {retry!r} ({'kept' if ok else 'dropped'})")
             text = retry if ok else ""
+        elif (text and english and PROMPT and len(audio) <= RETRY_MAX_SECONDS * store.RATE
+                and not plausible(text, audio, store.RATE)):
+            # More words than the sound could hold: Whisper made up a sentence, typically a
+            # rewording of its style prompt on a short or unclear take. Retry without the prompt.
+            segments, _ = self._run(audio, lang, False, vad_filter=True)
+            retry = " ".join(s.text.strip() for s in segments).strip()
+            ok = plausible(retry, audio, store.RATE)
+            log.info(f"  {text!r} doesn't fit the sound; without the prompt: {retry!r} "
+                     f"({'kept' if ok else 'dropped'})")
+            text = retry if ok else ""
         return text, lang
 
     def _first_pass(self, audio, settings, **kw):

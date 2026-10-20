@@ -391,6 +391,20 @@ def test_whispered_take_is_retried_without_the_voice_filter(monkeypatch, heard, 
     assert ("Didn't catch that" in notified) is (not typed)
 
 
+@pytest.mark.parametrize("without_prompt, typed", [
+    ("Option one.", ["Option one."]),
+    ("", []),
+])
+def test_made_up_sentence_is_retried_without_the_prompt(monkeypatch, without_prompt, typed):
+    d = make_dictation(monkeypatch)
+    made_up = "I'm going to start with a sentence, with punctuation and capitals."
+    d.models.model.transcribe = lambda audio, prompt=None, **_: (
+        [types.SimpleNamespace(text=made_up if prompt else without_prompt)], None)
+    d.pipeline.run(pipeline.TakeContext([burst(0.8)[:, None]]))
+    assert d.pasted == typed
+    assert ("Didn't catch that" in notified) is (not typed)
+
+
 def test_silence_is_not_retried(monkeypatch):
     d = make_dictation(monkeypatch)
     d.models.model = WhisperedModel("You")
