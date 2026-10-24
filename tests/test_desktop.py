@@ -1,6 +1,7 @@
 """Tests for notifications, dialogs, the clipboard and GNOME shortcuts."""
 import os
 import subprocess
+import time
 import types
 
 import pytest
@@ -117,9 +118,22 @@ def test_repeat_window_follows_the_desktop_repeat_delay(monkeypatch, out, window
 def test_notify_timeout_follows_its_level(monkeypatch, level, body, timeout):
     cmds = []
     monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/" + name)
-    monkeypatch.setattr(desktop.subprocess, "Popen", lambda cmd, **k: cmds.append(cmd))
+    monkeypatch.setattr(desktop, "spawn", cmds.append)
     real_notify("Title", body=body, level=level)
     assert cmds[0][cmds[0].index("-t") + 1] == timeout
+
+
+def test_spawned_helper_is_reaped_without_waiting_for_it():
+    p = []
+    real = desktop.subprocess.Popen
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(desktop.subprocess, "Popen", lambda cmd, **k: p.append(real(cmd, **k)) or p[-1])
+        desktop.spawn(["sleep", "0.2"])
+    assert p[0].returncode is None  # spawn returned at once
+    deadline = time.monotonic() + 5
+    while p[0].returncode is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert p[0].returncode == 0  # waited for: no zombie left behind
 
 
 def test_persistent_notify_stays_and_can_replace(monkeypatch, tmp_path):

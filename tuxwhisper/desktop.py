@@ -18,6 +18,13 @@ NOTIFY_TIMEOUTS = {"info": 1500, "info+body": 6000, "warn": 8000, "error": 8000}
 NOTIFY_ICONS = {"warn": "dialog-warning", "error": "dialog-error"}
 
 
+def spawn(cmd: list[str]) -> None:
+    """Run a helper without waiting for it, but reap it when it exits: a finished child left
+    unwaited stays in the service as a zombie until the next subprocess call."""
+    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    threading.Thread(target=p.wait, daemon=True).start()
+
+
 def notify(msg: str, persistent: bool = False, body: str | None = None, level: str = "info",
            icon: str | None = None, replace: str | None = None) -> str | None:
     """Show a desktop notification; level is "info", "warn" or "error". persistent=True keeps
@@ -40,8 +47,7 @@ def notify(msg: str, persistent: bool = False, body: str | None = None, level: s
         except subprocess.TimeoutExpired:
             return None
     timeout = NOTIFY_TIMEOUTS["info+body" if level == "info" and body else level]
-    subprocess.Popen(["notify-send", *opts, "-t", str(timeout), msg, *extra],
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    spawn(["notify-send", *opts, "-t", str(timeout), msg, *extra])
     return None
 
 
@@ -183,7 +189,7 @@ def sound(name: str) -> None:
     else:
         return
     if store.settings().sounds and os.path.exists(path):
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        spawn(cmd)
 
 
 def open_notifications_path():
@@ -224,10 +230,9 @@ def close_stale_notifications() -> None:
 def close_notification(nid: str | None) -> None:
     track_notification(nid, open_=False)
     if nid and shutil.which("gdbus"):
-        subprocess.Popen(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
-                          "--object-path", "/org/freedesktop/Notifications",
-                          "--method", "org.freedesktop.Notifications.CloseNotification", nid],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        spawn(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+               "--object-path", "/org/freedesktop/Notifications",
+               "--method", "org.freedesktop.Notifications.CloseNotification", nid])
 
 
 # xclip works on X11 and on Wayland desktops with XWayland (GNOME, KDE, most others);
