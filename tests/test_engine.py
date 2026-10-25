@@ -31,6 +31,17 @@ def test_load_smaller_uses_english_only_models_only_for_english(monkeypatch):
     assert engine.load_smaller("large-v3-turbo")[1] == "distil-large-v3.5"
 
 
+def test_chosen_model_is_loaded_once_it_fits_after_none_did_at_startup(monkeypatch):
+    loads, free = [], [0.05]
+    fake_gpu(monkeypatch, free, loads)
+    models = engine.ModelManager(*engine.load_model())  # nothing fits: no model yet
+    assert models.model is None and not models.ensure_loaded()
+    free[0] = 3.0  # another program freed the GPU
+    monkeypatch.setattr(engine, "free_gpu_gb", lambda: None)  # e.g. Vulkan: no memory figure
+    assert models.ensure_loaded()
+    assert loads == [engine.asr_model()] and models.name == "large-v3-turbo" and not models.fallback_from
+
+
 def test_startup_out_of_memory_falls_back(monkeypatch):
     loads = []
     fake_gpu(monkeypatch, [1.2], loads)

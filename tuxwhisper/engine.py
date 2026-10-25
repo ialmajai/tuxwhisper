@@ -402,8 +402,16 @@ class ModelManager:
         """Load the speech model back onto the GPU if it was freed (under a second from RAM).
         Without enough GPU memory, use the largest smaller model that fits; False if none does."""
         with self.lock:
-            if self.model is None:
-                return self._step_down(self.fallback_from)
+            if self.model is None:  # none fitted at startup: the chosen one may fit by now
+                try:
+                    self.model = load_whisper(asr_model())
+                except RuntimeError as e:
+                    if not out_of_memory(e):
+                        raise
+                    return self._step_down(self.fallback_from)
+                self.name, self.fallback_from = short_name(asr_model()), None
+                log.info(f"{self.name} fits in GPU memory now")
+                return True
             if self.model.loaded():
                 return True
             t0 = time.time()
