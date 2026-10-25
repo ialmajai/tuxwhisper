@@ -115,9 +115,10 @@ def modes() -> dict[str, str]:
     try:
         with open(store.MODES_FILE) as f:
             for line in f:
-                if "=>" in line and not line.startswith("#"):
-                    name, task = line.split("=>", 1)
-                    found[name.strip()] = task.strip()
+                if "=>" in line and not line.lstrip().startswith("#"):
+                    name, task = (part.strip() for part in line.split("=>", 1))
+                    if name and task:  # a style needs a name to pick and an instruction to follow
+                        found[name] = task
     except FileNotFoundError:
         pass
     return found

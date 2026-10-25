@@ -97,3 +97,11 @@ def test_cleanup_trusts_the_warm_up(monkeypatch):
     monkeypatch.setattr(llm, "ollama", lambda path, payload, timeout=30: {
         "done_reason": "stop", "message": {"content": '{"cleaned": "The take."}'}})
     assert llm.llm_cleanup("um the take", "en", on_gpu=True) == "The take."
+
+
+def test_modes_file_skips_comments_and_half_written_lines():
+    with open(store.MODES_FILE, "w") as f:
+        f.write("  # Indented => comment\n=> no name\nNo task =>\nTweet => Rewrite as a tweet.\n")
+    found = llm.modes()
+    assert found["Tweet"] == "Rewrite as a tweet."
+    assert not {"# Indented", "", "No task"} & found.keys()
