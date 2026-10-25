@@ -190,13 +190,12 @@ class Dictation:
         """Close the mic (under self.lock); the take, with what it needs captured now."""
         # Drop the audio recorded between the key release (cut_at) and now.
         excess = int(max(0.0, time.monotonic() - cut_at) * store.RATE) if cut_at else 0
-        try:
-            self.stream.stop()
-            self.stream.close()
-        except Exception as e:  # noqa: BLE001 - e.g. the mic was unplugged mid-take
-            log.info(f"microphone error on stop: {e}")
-        finally:
-            self.stream = None
+        for step in (self.stream.stop, self.stream.close):  # closed even if stopping failed
+            try:
+                step()
+            except Exception as e:  # noqa: BLE001 - e.g. the mic was unplugged mid-take
+                log.info(f"microphone error on stop: {e}")
+        self.stream = None
         indicator, self.indicator = self.indicator, None
         desktop.sound("device-removed")
         chunks, self.chunks = self.chunks, []

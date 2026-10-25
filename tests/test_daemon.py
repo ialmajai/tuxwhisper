@@ -284,8 +284,10 @@ def test_mic_error_on_stop_does_not_wedge(monkeypatch):
     def broken():
         raise OSError("device unplugged")
     d.stream.stop = broken
+    closed = []
+    d.stream.close = lambda: closed.append(True)
     d.toggle()
-    assert d.stream is None
+    assert d.stream is None and closed  # its handle isn't leaked
 
 
 def test_retype_refuses_while_a_take_is_in_flight(monkeypatch):
