@@ -77,6 +77,7 @@ class Dictation:
         self.last_hint = -HINT_EVERY
         self.chunks = []
         self.dropped = 0  # lost-audio count for the take being recorded
+        self.live = threading.Event()  # set by the take's first block of audio: the mic is on
         self.long: LongTake | None = None  # the take being recorded, transcribed while it runs long
         self.last_press = 0.0
         self.held = False
@@ -131,11 +132,11 @@ class Dictation:
         threading.Thread(target=self.models.ensure_loaded, daemon=True).start()  # overlaps the speech
         self.chunks = []
         self.dropped = 0
+        self.live.clear()
         self.rewrite = rewrite  # mode is set by the key that started the take
         # A cold load takes seconds, so overlap it with the speech; the cleanup skips its own
         # GPU check when the warm-up confirmed it.
         self.warming = self.background.submit(llm.warm_rewrite_model) if rewrite else None
-        desktop.sound("device-added")  # 0.2 s; over before the mic finishes opening
         try:
             stream = self.sd.InputStream(
                 samplerate=store.RATE, channels=1, dtype="float32",
@@ -159,10 +160,16 @@ class Dictation:
         if status and status.input_overflow:
             self.dropped += 1
         self.chunks.append(data.copy())
+        self.live.set()
 
     def _announce(self, stream, rewrite):
-        """Show "Recording…" outside self.lock: notify-send -p can take a while, and holding the
-        lock would delay a quick stop. A stop that came first closes the notification."""
+        """Beep and show "Recording…" outside self.lock: notify-send -p can take a while, and
+        holding the lock would delay a quick stop. A stop that came first closes the notification.
+        The beep waits for the mic's first audio (0.1-0.45 s after opening it), so words said
+        after it are never lost."""
+        self.live.wait(1)
+        if self.stream is stream:
+            desktop.sound("device-added")
         nid = desktop.notify(f"Recording ({llm.current_mode()})…" if rewrite else "Recording…",
                              persistent=True, body=self.hint, icon=MIC_ICON)
         with self.lock:
