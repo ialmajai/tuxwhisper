@@ -269,6 +269,10 @@ class Dictation:
             # Mid-take, the text before the cursor may not be the one to correct.
             if self.paster.kbd is None or self.stream is not None or self.next_ticket != self.serving:
                 return False
+            # A take pasted since the correction opened: the text before the cursor is that one.
+            last = store.load_history()[-1:]
+            if not last or last[0].get("at") != job.get("at"):
+                return False
             # Take a turn like a take: one stopped meanwhile pastes after this, not amid it.
             self.next_ticket += 1
         try:

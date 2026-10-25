@@ -421,7 +421,7 @@ def correct_last():
     replaced = False
     if retype and fresh():  # checked again: the dialog may have stayed open a long time
         with open(store.retype_path(), "w") as f:
-            json.dump({"delete": daemon.typed_length(before) + 1, "text": fixed}, f)
+            json.dump({"delete": daemon.typed_length(before) + 1, "text": fixed, "at": last.get("at")}, f)
         replaced = daemon.request("retype") == "ok"
     if not replaced:  # hand the fix over to paste by hand
         desktop.clipboard_set(fixed)

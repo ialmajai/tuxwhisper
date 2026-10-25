@@ -1,4 +1,5 @@
 """Tests for the dictation core: takes, pasting, saving and the socket server."""
+import json
 import os
 import stat
 import threading
@@ -234,11 +235,25 @@ def test_retype_erases_the_dictation_and_pastes_the_fix(monkeypatch, tmp_path):
     d = make_dictation(monkeypatch)
     d.paster.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
     d.paster.kbd = FakeKeyboard()
+    at = real_add_history("Hallo", typed=True)["at"]
     with open(store.retype_path(), "w") as f:
-        f.write('{"delete": 6, "text": "Hello"}')
+        json.dump({"delete": 6, "text": "Hello", "at": at}, f)
     assert d.retype()
     assert d.paster.kbd.keys == [14] * 6 and d.pasted == ["Hello"]
     assert not os.path.exists(store.retype_path())
+
+
+def test_retype_refuses_once_a_newer_dictation_was_pasted(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
+    d = make_dictation(monkeypatch)
+    d.paster.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
+    d.paster.kbd = FakeKeyboard()
+    at = real_add_history("Hallo", typed=True)["at"]  # the dictation being corrected
+    real_add_history("A newer dictation", typed=True)  # pasted while the correction was open
+    with open(store.retype_path(), "w") as f:
+        json.dump({"delete": 6, "text": "Hello", "at": at}, f)
+    assert not d.retype() and d.paster.kbd.keys == []  # the newer text is left alone
 
 
 def test_typed_length_counts_characters_not_accents():
@@ -573,8 +588,9 @@ def test_take_stopped_during_a_retype_pastes_after_it(monkeypatch):
         order.append(text.strip())
         return True
     d.paster.paste = paste
+    at = real_add_history("Hallo", typed=True)["at"]
     with open(store.retype_path(), "w") as f:
-        f.write('{"delete": 1, "text": "Hello"}')
+        json.dump({"delete": 1, "text": "Hello", "at": at}, f)
     retyping = threading.Thread(target=d.retype)
     retyping.start()
     assert typing.wait(5)

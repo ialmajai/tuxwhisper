@@ -1,4 +1,5 @@
 """Tests for the settings menu and correcting the last transcript."""
+import json
 import os
 
 import pytest
@@ -88,7 +89,7 @@ def test_correct_last_never_offers_to_fix_a_rewritten_take(monkeypatch, tmp_path
 
 def test_correct_last_replaces_in_place_when_the_daemon_can(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    real_add_history("send it to jon", typed=True)
+    at = real_add_history("send it to jon", typed=True)["at"]
     jobs = []
     def fake_request(cmd):
         with open(store.retype_path()) as f:
@@ -98,7 +99,7 @@ def test_correct_last_replaces_in_place_when_the_daemon_can(monkeypatch, tmp_pat
     _, copied = fake_dialogs(monkeypatch, "send it to John", [])
     menu.correct_last()
     assert copied == []  # typed in place, so nothing to paste by hand
-    assert jobs == ['{"delete": 15, "text": "send it to John"}']  # 14 characters plus the space
+    assert [json.loads(j) for j in jobs] == [{"delete": 15, "text": "send it to John", "at": at}]  # 14 + the space
     assert notified[-1] == "Replaced the dictated text"
 
 
