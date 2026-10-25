@@ -18,11 +18,14 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
-      - run: sudo apt-get update && sudo apt-get install -y libportaudio2
+      # PulseAudio: PortAudio (Ubuntu 26.04's) fails to start without a sound server, which a
+      # desktop always has; a runner gets one with a null output for the import check below.
+      - run: sudo apt-get update && sudo apt-get install -y libportaudio2 pulseaudio
       - run: pip install ruff==0.16.10 pytest -e .
       - run: ruff check
       - run: pytest -q
       - run: shellcheck asr install.sh uninstall.sh
+      - run: pulseaudio --start --exit-idle-time=-1 && pactl info
       - run: python -c "import faster_whisper, numpy, sounddevice, evdev"
 
   # Runs install.sh's system-package step, then the Python install, on each distro.
