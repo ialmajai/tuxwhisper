@@ -29,8 +29,11 @@ SELF_CORRECTION = (
     "keep only the replacement and drop the replaced words and the cue (\"meet on Tuesday no "
     "wait Wednesday\" becomes \"Meet on Wednesday.\"). Keep everything else, including a "
     "choice joined by a plain or.")
-CORRECTION_CUE = re.compile(r"\b(no,? wait|no,? no|sorry|(?<!what )i mean|i meant|make that|or rather|"
-                            r"scratch that)\b", re.IGNORECASE)
+# Each cue only where it corrects: "sorry" between commas, not "I'm sorry about"; "make that"
+# after "actually", "no" or a comma, not "make that call"; "I mean(t)" not before "it" or "to".
+CORRECTION_CUE = re.compile(r"\b(no,? wait|no,? no|(?<=, )sorry(?=,)|(?<!what )i mean(?! it\b| to\b)|"
+                            r"i meant(?! it\b| to\b)|(?:actually|no|,) make that|or rather|scratch that)\b",
+                            re.IGNORECASE)
 # Cleanup modes; the settings menu picks one, and modes.txt adds more ("Name => instruction").
 MODES = {
     "Clean up": "Fix punctuation and capitalization and remove filler words (um, uh, like, "

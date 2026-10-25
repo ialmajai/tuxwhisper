@@ -40,6 +40,13 @@ def test_loading_keeps_the_model_for_the_cleanup_even_when_unloading_right_after
     ("is it tuesday or wednesday", False),
     ("there are no errors in the log", False),
     ("i actually liked the first version", False),
+    ("send it to John, sorry, Jim.", True),
+    ("Meet at four, make that five.", True),
+    ("Tuesday, I meant Wednesday.", True),
+    ("Can you make that call tomorrow?", False),
+    ("I meant to tell you about the release.", False),
+    ("Tell her I'm sorry about the delay.", False),
+    ("I mean it, the tests are flaky.", False),
 ])
 def test_self_correction_rule_only_for_correction_cues(text, cued):
     assert (llm.SELF_CORRECTION in llm.rewrite_task(text)) is cued
