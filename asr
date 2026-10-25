@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
 # Runs TuxWhisper from a git clone: the package in tuxwhisper/ with the clone's .venv.
 # Also puts pip-installed cuDNN/cuBLAS and whisper.cpp libraries (if any) on the library path.
-DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+if [ -L "$0" ]; then  # e.g. a link in ~/.local/bin: the clone is where it points
+    DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+else  # without readlink and dirname: two programs fewer to start on every key press
+    case "$0" in */*) DIR="${0%/*}" ;; *) DIR=. ;; esac
+    DIR="$(cd "$DIR" && pwd)"
+fi
+# Key presses go to the Rust client when it's built (client-rs/; install.sh builds it if Rust
+# is installed): starting Python takes 120-230 ms of every press. It hands back to Python,
+# with TUXWHISPER_SLOW set, whenever the daemon isn't there to take the command.
+KEY="$DIR/client-rs/target/release/tuxwhisper-key"
+case "${1:-}" in toggle|rewrite|save)
+    if [ -z "${TUXWHISPER_SLOW:-}" ] && [ -x "$KEY" ]; then
+        TUXWHISPER_CMD="$DIR/asr" exec "$KEY" "$@"
+    fi ;;
+esac
 for SITE in "$DIR"/.venv/lib/python3*/site-packages; do
     [ -d "$SITE/nvidia" ] && export LD_LIBRARY_PATH="$SITE/nvidia/cudnn/lib:$SITE/nvidia/cublas/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     [ -e "$SITE/libwhisper.so.1" ] && export LD_LIBRARY_PATH="$SITE${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

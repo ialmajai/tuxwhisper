@@ -125,6 +125,15 @@ else
     uv pip uninstall -q --python .venv evdev 2>/dev/null || true  # replaced by evdev-binary in 0.2
     nobin=(); [ "$engine" = vulkan ] && nobin=(--no-binary pywhispercpp)
     "${build[@]}" uv pip install -q --python .venv "${nobin[@]}" -e ".$extra"
+    # The key-press client in Rust: a key press reaches the daemon in ~1 ms instead of the
+    # ~80 ms starting Python takes. Optional: without Rust, keys go through Python as before.
+    if command -v cargo >/dev/null; then
+        if (cd client-rs && cargo build --release -q); then
+            note "Built the fast key-press client."
+        else
+            note "Couldn't build the fast key-press client (client-rs); key presses use Python."
+        fi
+    fi
 fi
 
 step "3/6  Virtual keyboard (lets TuxWhisper type for you)"

@@ -23,6 +23,9 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y libportaudio2 pulseaudio
       - run: pip install ruff==0.16.10 pytest -e .
       - run: ruff check
+      # The Rust key-press client (Rust is preinstalled on the runner); its tests need the build.
+      - run: cargo fmt --check && cargo clippy --release -q -- -D warnings && cargo build --release -q
+        working-directory: client-rs
       - run: pytest -q
       - run: shellcheck asr install.sh uninstall.sh
       - run: pulseaudio --start --exit-idle-time=-1 && pactl info

@@ -16,3 +16,4 @@ samples/
 .claude/
 architecture-review.md
 elegance-performance-review.md
+client-rs/target/
