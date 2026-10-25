@@ -91,7 +91,7 @@ def make_dictation(monkeypatch):
     d.paster.paste = lambda text: d.pasted.append(text.strip()) or True
     d.refresh_hint = lambda: None
     monkeypatch.setattr(llm, "warm_rewrite_model", lambda: None)
-    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None: f"CLEANED:{text}")
+    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None, **_: f"CLEANED:{text}")
     FakeStream.fail_start = False
     return d
 

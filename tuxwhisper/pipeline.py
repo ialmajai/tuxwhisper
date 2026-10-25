@@ -3,7 +3,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from typing import Any
@@ -77,7 +77,6 @@ class TakePipeline:
         self.after_paste = after_paste
         self.last_clip_warning = -CLIP_WARN_EVERY
         # Cleanups run here, so a slow one can be given up on without stopping it mid-request.
-        self.cleanups = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tuxwhisper-cleanup")
 
     def run(self, take: TakeContext) -> None:
         """Transcribe one take, clean it up if asked, and paste it. take.status holds its
@@ -150,16 +149,27 @@ class TakePipeline:
             status[:] = [nid]
         timer = threading.Timer(0.8, cleaning)
         timer.start()
-        def run():
-            on_gpu = None  # not known: llm_cleanup checks
-            if warming:
-                on_gpu = True if warming.result() is True else None  # a failed warm-up is checked again
-            return llm.llm_cleanup(text, lang, on_gpu=on_gpu)
+        given_up = threading.Event()
+        def notify(*args, **kw):  # a cleanup given up on has been reported: no second notice
+            if not given_up.is_set():
+                desktop.notify(*args, **kw)
+        def run(done):
+            try:
+                on_gpu = None  # not known: llm_cleanup checks
+                if warming:
+                    on_gpu = True if warming.result() is True else None  # a failed warm-up is checked again
+                done.set_result(llm.llm_cleanup(text, lang, on_gpu=on_gpu, notify=notify))
+            except BaseException as e:  # noqa: BLE001 - handed to the waiting take
+                done.set_exception(e)
         # Takes paste in order, so a stuck cleanup would hold up every take after it: give up
         # after a deadline and paste the plain text (the request finishes, unused, on its own).
+        # Each cleanup has its own thread, so one stuck that way never queues the next.
+        done = Future()
+        threading.Thread(target=run, args=(done,), daemon=True, name="tuxwhisper-cleanup").start()
         try:
-            text = self.cleanups.submit(run).result(timeout=cleanup_deadline(text))
+            text = done.result(timeout=cleanup_deadline(text))
         except FutureTimeout:
+            given_up.set()
             log.info(f"  rewrite gave up after {cleanup_deadline(text)}s")
             desktop.notify("LLM cleanup took too long; pasted the plain transcript",
                            body="Ollama may still be loading the model. Try again in a moment.", level="warn")

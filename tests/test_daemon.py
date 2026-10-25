@@ -664,7 +664,7 @@ def test_take_passes_the_warm_up_result_to_the_cleanup(monkeypatch):
     d = make_dictation(monkeypatch)
     monkeypatch.setattr(llm, "warm_rewrite_model", lambda: True)
     got = []
-    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None: got.append(on_gpu) or text)
+    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None, **_: got.append(on_gpu) or text)
     d.toggle(rewrite=True)
     d.toggle()
     assert got == [True]
@@ -721,13 +721,47 @@ def test_settings_key_is_looked_up_at_most_every_few_minutes(monkeypatch):
 def test_stuck_cleanup_pastes_the_plain_transcript_after_the_deadline(monkeypatch):
     d = make_dictation(monkeypatch)
     release = threading.Event()
-    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None: release.wait(5) and "late")
+    monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None, **_: release.wait(5) and "late")
     monkeypatch.setattr(pipeline, "cleanup_deadline", lambda text: 0.2)
     d.toggle(rewrite=True)
     d.toggle()
     release.set()
     assert d.pasted == ["take1"]  # not held up, not cleaned
     assert "LLM cleanup took too long; pasted the plain transcript" in notified
+
+
+def test_cleanup_given_up_on_shows_no_second_notice(monkeypatch):
+    d = make_dictation(monkeypatch)
+    release, finished = threading.Event(), threading.Event()
+    def stuck(text, lang, on_gpu=None, notify=None):
+        release.wait(5)
+        notify("LLM cleanup failed; pasted the plain transcript", level="warn")  # Ollama gave up too, later
+        finished.set()
+        return text
+    monkeypatch.setattr(llm, "llm_cleanup", stuck)
+    monkeypatch.setattr(pipeline, "cleanup_deadline", lambda text: 0.2)
+    d.toggle(rewrite=True)
+    d.toggle()
+    release.set()
+    assert finished.wait(5)
+    assert "LLM cleanup failed; pasted the plain transcript" not in notified  # "took too long" said it
+
+
+def test_stuck_cleanups_don_t_hold_up_a_later_one(monkeypatch):
+    d = make_dictation(monkeypatch)
+    release, calls = threading.Event(), []
+    def cleanup(text, lang, on_gpu=None, **_):
+        calls.append(1)
+        if len(calls) <= 2:  # Ollama hangs on the first two
+            release.wait(5)
+        return f"CLEANED:{text}"
+    monkeypatch.setattr(llm, "llm_cleanup", cleanup)
+    monkeypatch.setattr(pipeline, "cleanup_deadline", lambda text: 0.3)
+    for _ in range(3):
+        d.toggle(rewrite=True)
+        d.toggle()
+    release.set()
+    assert d.pasted == ["take1", "take2", "CLEANED:take3"]  # the third isn't queued behind them
 
 
 def test_cleanup_deadline_grows_with_the_text():

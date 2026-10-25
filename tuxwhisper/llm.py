@@ -152,20 +152,22 @@ def context_size(system: str, text: str) -> int | None:
     return next((n for n in CONTEXT_SIZES if n >= need), None)
 
 
-def llm_cleanup(text: str, lang: str | None, on_gpu: bool | None = None) -> str:
+def llm_cleanup(text: str, lang: str | None, on_gpu: bool | None = None, notify=None) -> str:
     """LLM-cleaned transcript, or the original text if Ollama fails or lacks GPU memory.
-    on_gpu: True when the warm-up just confirmed the model is on the GPU; None checks."""
+    on_gpu: True when the warm-up just confirmed the model is on the GPU; None checks.
+    notify: shows its notices (desktop.notify), so a caller that gave up can silence them."""
+    notify = notify or desktop.notify
     try:
         if not (on_gpu or rewrite_model_on_gpu()):
             log.info("rewrite skipped: model doesn't fit in GPU memory")
-            desktop.notify("Not enough GPU memory for LLM cleanup; pasted the plain transcript", level="warn")
+            notify("Not enough GPU memory for LLM cleanup; pasted the plain transcript", level="warn")
             return text
         system = REWRITE_SYSTEM.replace("{task}", rewrite_task(text)).replace(
             "{language}", store.LANGUAGES.get(lang, f"the language with code {lang!r}"))
         ctx = context_size(system, text)
         if ctx is None:
             log.info(f"rewrite skipped: {len(text)} characters is too long")
-            desktop.notify("Too long for LLM cleanup; pasted the plain transcript",
+            notify("Too long for LLM cleanup; pasted the plain transcript",
                            body="Split long dictations into shorter takes.", level="warn")
             return text
         r = ollama("/api/chat", {
@@ -182,12 +184,12 @@ def llm_cleanup(text: str, lang: str | None, on_gpu: bool | None = None) -> str:
         counts = r.get("prompt_eval_count"), r.get("eval_count")
         if r.get("done_reason") == "length" or (all(counts) and sum(counts) >= ctx):
             log.info(f"rewrite cut short at {ctx} tokens")
-            desktop.notify("Too long for LLM cleanup; pasted the plain transcript",
+            notify("Too long for LLM cleanup; pasted the plain transcript",
                            body="Split long dictations into shorter takes.", level="warn")
             return text
         cleaned = json.loads(r["message"]["content"])["cleaned"].strip()
     except Exception as e:  # noqa: BLE001 - any failure falls back to the plain transcript
         log.info(f"rewrite failed: {e}")
-        desktop.notify("LLM cleanup failed; pasted the plain transcript", level="warn")
+        notify("LLM cleanup failed; pasted the plain transcript", level="warn")
         return text
     return cleaned or text
