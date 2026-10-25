@@ -77,6 +77,22 @@ def test_saved_recordings_are_private(monkeypatch):
     assert mode == 0o700
 
 
+def test_two_takes_saved_in_the_same_second_are_both_kept(monkeypatch):
+    class Frozen(recordings.datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 25, 12, 0, 0)
+    monkeypatch.setattr(recordings.datetime, "datetime", Frozen)
+    d = make_dictation(monkeypatch)
+    for text in ("one", "two"):
+        d.recordings.write_recording(np.zeros(store.RATE, dtype=np.float32), text, None)
+    with open(os.path.join(store.RECORDINGS, "metadata.csv")) as f:
+        rows = f.read().splitlines()
+    assert rows == ["file_name,transcription", "20261025-120000.wav,one", "20261025-120000-2.wav,two"]
+    assert sorted(n for n in os.listdir(store.RECORDINGS) if n.endswith(".wav")) == [
+        "20261025-120000-2.wav", "20261025-120000.wav"]
+
+
 def test_save_asks_first_and_keeps_the_fixed_transcript(monkeypatch):
     d = make_dictation(monkeypatch)
     d.recordings.last_take = recordings.Take(np.zeros(store.RATE, dtype=np.float32), "send it to jon")

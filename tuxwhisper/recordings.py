@@ -91,8 +91,15 @@ class Recordings:
         import numpy as np
         os.makedirs(store.RECORDINGS, mode=0o700, exist_ok=True)
         os.chmod(store.RECORDINGS, 0o700)  # voice data: only you can read it
-        name = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + ".wav"
-        with wave.open(os.path.join(store.RECORDINGS, name), "wb") as w:
+        stamp, n = datetime.datetime.now().strftime("%Y%m%d-%H%M%S"), 1
+        while True:  # two takes saved in the same second get -2, -3...: never overwrite one
+            name = f"{stamp}{f'-{n}' if n > 1 else ''}.wav"
+            try:
+                f = open(os.path.join(store.RECORDINGS, name), "xb")  # noqa: SIM115 - closed by the with below
+                break
+            except FileExistsError:
+                n += 1
+        with f, wave.open(f, "wb") as w:
             w.setnchannels(1)
             w.setsampwidth(2)
             w.setframerate(store.RATE)
