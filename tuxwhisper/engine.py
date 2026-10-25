@@ -552,7 +552,7 @@ class ModelManager:
             # rewording of its style prompt on a short or unclear take. Retry without the prompt.
             segments, _ = self._run(audio, lang, False, vad_filter=True)
             retry = " ".join(s.text.strip() for s in segments).strip()
-            ok = plausible(retry, audio, store.RATE)
+            ok = plausible(retry, audio, store.RATE, MADE_UP_RATE)  # as doubting it: fast speech is real
             log.info(f"  {text!r} doesn't fit the sound; without the prompt: {retry!r} "
                      f"({'kept' if ok else 'dropped'})")
             text = retry if ok else ""

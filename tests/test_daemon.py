@@ -464,6 +464,16 @@ def test_fast_speech_is_not_retried_without_the_prompt(monkeypatch):
     assert d.pasted == [said]
 
 
+def test_fast_speech_found_by_the_retry_without_the_prompt_is_kept(monkeypatch):
+    d = make_dictation(monkeypatch)
+    made_up = "I'm going to start with a sentence, with punctuation and capitals, again and again."
+    said = "We'll deploy the repository tomorrow."  # 11 counted syllables in 1.2 s: fast, but real
+    d.models.model.transcribe = lambda audio, prompt=None, **_: (
+        [types.SimpleNamespace(text=made_up if prompt else said)], None)
+    d.pipeline.run(pipeline.TakeContext([burst(1.2)[:, None]]))
+    assert d.pasted == [said]
+
+
 def test_silence_is_not_retried(monkeypatch):
     d = make_dictation(monkeypatch)
     d.models.model = WhisperedModel("You")
