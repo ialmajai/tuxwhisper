@@ -121,7 +121,8 @@ class TakePipeline:
         parts = f" ({take.long.passes} passes while speaking, {take.long.tail:.1f}s tail)" if streamed else ""
         log.info(f"  timing: transcribe {t_asr:.2f}s{parts}, cleanup {t_cleanup:.2f}s, paste {time.time() - t2:.2f}s;"
                  f" {time.monotonic() - take.stopped_at:.2f}s from stop to pasted")
-        kept.entry = store.add_history(text, rewritten=take.rewrite, typed=typed)  # only a typed take can be retyped
+        # Only a typed take can be retyped; a replaced one's text no longer matches its recording.
+        kept.entry = store.add_history(text, rewritten=take.rewrite, typed=typed, replaced=text != kept.text)
         self.warn_if_clipped(audio)
         self.after_paste()
 

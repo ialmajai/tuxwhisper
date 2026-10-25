@@ -180,12 +180,13 @@ def load_history() -> list[dict]:
         return []
 
 
-def add_history(text: str, rewritten: bool = False, typed: bool = False) -> dict | None:
+def add_history(text: str, rewritten: bool = False, typed: bool = False, replaced: bool = False) -> dict | None:
     """Keep the last 20 transcripts for "Recent transcripts" and "Correct last transcript".
-    typed: it was typed at the cursor (not just copied), so a correction may erase and retype it."""
+    typed: it was typed at the cursor (not just copied), so a correction may erase and retype it;
+    rewritten, replaced: the LLM cleanup or a replacement rule changed Whisper's text."""
     if history_path():
         entry = {"time": time.strftime("%H:%M"), "text": text, "rewritten": rewritten,
-                 "typed": typed, "at": time.time()}
+                 "replaced": replaced, "typed": typed, "at": time.time()}
         with file_lock(history_path()):
             save_history((load_history() + [entry])[-20:])
         return entry

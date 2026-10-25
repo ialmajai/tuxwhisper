@@ -429,7 +429,8 @@ def correct_last():
     choices = [(f'Always write "{spoken}" as "{written}"' if kind == "rule"
                 else f'Add "{written}" to the vocabulary', kind, spoken, written, ticked)
                for kind, spoken, written, ticked in suggest_learning(before, fixed, (store.vocab() or "").split(", "))]
-    if last.get("recording") and not last.get("rewritten"):
+    # Only when the text is still Whisper's: a saved recording's transcript must match its audio.
+    if last.get("recording") and not last.get("rewritten") and not last.get("replaced"):
         choices.append(("Fix the saved recording's transcript (for fine-tuning)", "recording",
                         last["recording"], fixed, True))
     picked = set()

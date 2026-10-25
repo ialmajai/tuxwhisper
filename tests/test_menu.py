@@ -78,9 +78,10 @@ def test_correct_last_fixes_the_saved_recording(monkeypatch, tmp_path):
                                          "b.wav,send it to John"]
 
 
-def test_correct_last_never_offers_to_fix_a_rewritten_take(monkeypatch, tmp_path):
+@pytest.mark.parametrize("changed", ["rewritten", "replaced"])
+def test_correct_last_never_offers_to_fix_a_rewritten_or_replaced_take(monkeypatch, tmp_path, changed):
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    real_add_history("Dear team, the build failed.", rewritten=True)
+    real_add_history("Dear team, the build failed.", **{changed: True})
     store.mark_last_saved("c.wav")
     shown, _ = fake_dialogs(monkeypatch, "Dear team, the build passed.", [])
     menu.correct_last()

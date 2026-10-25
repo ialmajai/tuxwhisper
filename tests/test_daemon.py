@@ -301,6 +301,16 @@ def test_retype_refuses_while_a_take_is_in_flight(monkeypatch):
     assert not d.retype() and d.paster.kbd.keys == []
 
 
+def test_history_notes_a_take_a_replacement_rule_changed(monkeypatch, tmp_path):
+    (tmp_path / "replacements.txt").write_text("take1 => Take one\n")
+    d = make_dictation(monkeypatch)
+    added = []
+    monkeypatch.setattr(store, "add_history", lambda text, **kw: added.append((text, kw["replaced"])))
+    d.toggle()
+    d.toggle()
+    assert added == [("Take one", True)]  # so its recording's transcript isn't "fixed" to this
+
+
 def test_history_records_whether_the_take_was_typed(monkeypatch):
     d = make_dictation(monkeypatch)
     monkeypatch.setattr(store, "add_history", real_add_history)
