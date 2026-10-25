@@ -93,8 +93,16 @@ def test_unload_settings_validate():
 
 
 def test_settings_with_emoji_and_control_characters_round_trip():
-    store.save_settings({"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"}, "x": "a\x7fb"})
-    assert store.read_config() == {"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"}, "x": "a\x7fb"}
+    store.save_settings({"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"}, "rewrite_model": "a\x7fb"})
+    assert store.read_config() == {"mode": "🐦 Tweet", "mode_models": {"📧 Email": "qwen3:8b"},
+                                   "rewrite_model": "a\x7fb"}
+
+
+def test_saving_drops_hand_added_keys_that_would_make_the_file_unreadable():
+    with open(store.CONFIG, "w") as f:
+        f.write('sounds = false\nwhen = 2024-01-01\nbig = inf\n"my key" = 1\n[[t]]\nx = 1\n')
+    store.update_settings({"mode": "Formal"})  # saving from the menu
+    assert store.read_config() == {"sounds": False, "mode": "Formal"}  # still readable
 
 
 def test_unreadable_settings_are_reported_and_kept(monkeypatch):

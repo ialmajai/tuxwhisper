@@ -253,7 +253,14 @@ def toml_value(v):
 
 
 def save_settings(s: dict[str, object]) -> None:
-    """Write only the given settings, so unchanged ones keep following the environment."""
+    """Write only the given settings, so unchanged ones keep following the environment. Other
+    keys (hand-added; nothing reads them) are left out: some, such as dates or arrays of
+    tables, can't be written back here and would make the file unreadable."""
+    import dataclasses
+
+    from tuxwhisper.settings import Settings
+    known = {f.name for f in dataclasses.fields(Settings)}
+    s = {k: v for k, v in s.items() if k in known}
     os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
     try:
         with open(CONFIG, "rb") as f:
