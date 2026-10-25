@@ -15,7 +15,8 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
 - Speech model in memory and LLM in memory: how long each stays on the GPU when idle (default
   30 minutes), or always loaded. The speech model reloads in under a second from RAM, starting
   as you press the key, so you rarely notice.
-- Microphone: released after each take (default), or kept open for 5 to 60 minutes after one.
+- Microphone: released after each take (default), or kept open for a while after one: pick 5,
+  10, 30 or 60 minutes, or type any time up to a day under Other….
   Kept open, recording starts the moment you press the key instead of after the 0.1-0.5 s the
   mic takes to open, so a word said straight away isn't clipped. Nothing is recorded between
   takes (the audio is dropped as it arrives), but your desktop's microphone indicator stays on

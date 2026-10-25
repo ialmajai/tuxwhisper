@@ -230,3 +230,34 @@ def test_menu_correction_waits_for_one_opened_with_the_key(monkeypatch):
     menu.correct_last_once()
     menu.correct_last_once()  # the menu's own lock was let go after the first
     assert opened == [True, True]
+
+
+@pytest.mark.parametrize("picked, typed, saved", [
+    ("open for 10 min after a take", None, 10),
+    ("Other…", "45", 45),                       # any number of minutes
+    ("Other…", " 0 ", 0),                       # released after each take
+    ("Other…", "soon", None),                   # not a number: nothing changes
+    ("Other…", "99999", None),                  # more than a day
+    ("Other…", None, None),                     # cancelled
+])
+def test_mic_open_time_can_be_picked_or_typed(monkeypatch, picked, typed, saved):
+    errors = []
+    def dialog(*args):
+        if "--entry" in args:
+            return typed
+        if "--error" in args:
+            errors.append(args)
+        return None
+    monkeypatch.setattr(desktop, "zenity", dialog)
+    monkeypatch.setattr(desktop, "pick", lambda title, options, current: picked)
+    changes = menu.edit_mic_open(store.settings())
+    assert changes == (None if saved is None else {"mic_open_minutes": saved})
+    assert bool(errors) is (typed is not None and typed.strip() in ("soon", "99999"))
+
+
+def test_a_typed_mic_open_time_is_shown_ticked_next_time(monkeypatch):
+    store.save_settings({"mic_open_minutes": 45})
+    shown = {}
+    monkeypatch.setattr(desktop, "pick", lambda title, options, current: shown.update(o=options, c=current))
+    menu.edit_mic_open(store.settings())
+    assert shown["c"] == "open for 45 min after a take" and shown["c"] in shown["o"]

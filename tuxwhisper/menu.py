@@ -220,10 +220,28 @@ def mic_label(minutes):
     return f"open for {minutes} min after a take" if minutes else "released after each take"
 
 
+MIC_OPEN_MAX = 24 * 60  # minutes; longer, and the mic would simply never be released
+
+
 def edit_mic_open(s):
-    labels = {mic_label(m): m for m in (0, 5, 10, 30, 60)}
-    picked = desktop.pick("Microphone", list(labels), mic_label(s.mic_open_minutes))
-    return {"mic_open_minutes": labels[picked]} if picked else None
+    """Pick how long the mic stays open after a take, or type any number of minutes."""
+    labels = {mic_label(m): m for m in sorted({0, 5, 10, 30, 60, s.mic_open_minutes})}
+    picked = desktop.pick("Microphone", [*labels, "Other…"], mic_label(s.mic_open_minutes))
+    if picked != "Other…":
+        return {"mic_open_minutes": labels[picked]} if picked else None
+    typed = desktop.zenity("--entry", "--title=Microphone", f"--entry-text={s.mic_open_minutes or 30}",
+                           f"--text=Minutes the mic stays open after a take (1 to {MIC_OPEN_MAX}; 0 releases it at once):")
+    if typed is None:
+        return None
+    try:
+        minutes = int(typed.strip())
+    except ValueError:
+        minutes = -1
+    if not 0 <= minutes <= MIC_OPEN_MAX:
+        desktop.zenity("--error", "--title=Microphone",
+                       f"--text=Type a whole number of minutes, from 0 to {MIC_OPEN_MAX}.")
+        return None
+    return {"mic_open_minutes": minutes}
 
 
 def edit_sound_volume(s):
