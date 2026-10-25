@@ -149,9 +149,10 @@ CONTEXT_SIZES = (4096, 8192)
 
 def context_size(system: str, text: str) -> int | None:
     """The smallest context that holds the instructions, the transcript and a rewrite as long
-    as it (about 3 characters a token, plus JSON overhead); None if even the largest can't.
-    Too small a context doesn't fail: Ollama trims the input and the rewrite loses words."""
-    need = (len(system) + 2 * len(text)) // 3 + 200
+    as it (about 3 bytes of UTF-8 a token: 3 letters of English, 1 Chinese character; plus
+    JSON overhead); None if even the largest can't. Too small a context doesn't fail: Ollama
+    trims the input and the rewrite loses words."""
+    need = (len(system) + 2 * len(text.encode())) // 3 + 200
     return next((n for n in CONTEXT_SIZES if n >= need), None)
 
 

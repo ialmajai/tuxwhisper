@@ -120,3 +120,9 @@ def test_gpu_check_finds_the_model_ollama_lists(monkeypatch, model, listed):
         return {"models": [{"name": listed, "size": 2, "size_vram": 2}]}
     monkeypatch.setattr(llm, "ollama", ollama)
     assert llm.rewrite_model_on_gpu()
+
+
+def test_context_size_allows_for_scripts_that_take_more_tokens_a_character():
+    system = "x" * 1500
+    assert llm.context_size(system, "word " * 600) == 4096   # 3000 letters of English
+    assert llm.context_size(system, "字" * 3000) == 8192     # about a token a character
