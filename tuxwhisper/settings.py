@@ -27,6 +27,10 @@ class Settings:
     # Transcribe takes over 20 s in parts while they're still being recorded, so the text comes
     # sooner after the key's release.
     stream_long_takes: bool = True
+    # Minutes the mic stays open after a take, so the next one starts recording at once instead
+    # of after the 0.1-0.5 s it takes to open; 0 releases it after every take. Audio between
+    # takes is dropped as it arrives, but the desktop's mic indicator stays on.
+    mic_open_minutes: int = 0
 
     @classmethod
     def from_config(cls, raw: Mapping[str, Any], env: Mapping[str, str] = os.environ) -> "Settings":
@@ -36,7 +40,7 @@ class Settings:
              "language": env.get("ASR_LANGUAGE") or "", "paste_key": env.get("ASR_PASTE_KEY", "shift+insert"),
              "rewrite_model": env.get("ASR_REWRITE_MODEL", "llama3.2"), "mode": "Clean up",
              "asr_model": env.get("ASR_MODEL", ""), "asr_unload_minutes": 30, "llm_unload_minutes": 30,
-             "mode_models": {}, "stream_long_takes": env.get("ASR_STREAM", "1") != "0"}
+             "mode_models": {}, "stream_long_takes": env.get("ASR_STREAM", "1") != "0", "mic_open_minutes": 0}
         s.update({k: v for k, v in raw.items() if k in s and cls._fits(k, v)})
         try:
             s["sound_volume"] = min(max(int(s["sound_volume"]), 0), 100)
@@ -48,6 +52,7 @@ class Settings:
         for key, low in (("asr_unload_minutes", 0), ("llm_unload_minutes", -1)):
             if not isinstance(s[key], int) or isinstance(s[key], bool) or s[key] < low:
                 s[key] = 30
+        s["mic_open_minutes"] = max(s["mic_open_minutes"], 0)
         if not isinstance(s["stream_long_takes"], bool):
             s["stream_long_takes"] = True
         if s["language"] not in LANGUAGES:  # also catches a wrong type from a hand-edited config

@@ -216,6 +216,16 @@ def edit_unload(key, title, never):
     return edit
 
 
+def mic_label(minutes):
+    return f"open for {minutes} min after a take" if minutes else "released after each take"
+
+
+def edit_mic_open(s):
+    labels = {mic_label(m): m for m in (0, 5, 10, 30, 60)}
+    picked = desktop.pick("Microphone", list(labels), mic_label(s.mic_open_minutes))
+    return {"mic_open_minutes": labels[picked]} if picked else None
+
+
 def edit_sound_volume(s):
     picked = desktop.zenity("--scale", "--title=Sound volume", "--min-value=0", "--max-value=100",
                             "--step=5", f"--value={s.sound_volume}", "--text=Percent of your system volume:")
@@ -308,6 +318,8 @@ SETTINGS = [
     Setting("asr_unload_minutes", "Speech model in memory", lambda s: unload_label(s.asr_unload_minutes, 0),
             edit_unload("asr_unload_minutes", "Speech model in memory", 0),
             "Free GPU memory when you haven't dictated for a while; reloads in under a second"),
+    Setting("mic_open_minutes", "Microphone", lambda s: mic_label(s.mic_open_minutes), edit_mic_open,
+            "Kept open, recording starts at once (the mic indicator stays on; nothing is recorded)"),
     Setting("vocab", "Vocabulary", lambda s: "Edit…", edit_file(store.VOCAB, "Vocabulary", store.VOCAB_HEADER),
             "Names and jargon Whisper should spell right (English)"),
     Setting("replacements", "Replacements", lambda s: "Edit…",

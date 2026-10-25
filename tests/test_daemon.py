@@ -801,3 +801,102 @@ def test_take_logs_its_stage_timings(monkeypatch, caplog):
         d.toggle()
         d.toggle()
     assert any("timing: transcribe" in r.message and "from stop to pasted" in r.message for r in caplog.records)
+
+
+# --- the mic kept open between takes ------------------------------------------------------------
+
+class CountingStream:
+    """A mic that counts how often it's opened and notes when it's closed; audio is fed by hand."""
+    opened = 0
+
+    def __init__(self, callback, **_):
+        CountingStream.opened += 1
+        self.callback, self.closed, self.active = callback, False, True
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+def kept_open_dictation(monkeypatch, minutes):
+    store.save_settings({"mic_open_minutes": minutes})
+    d = make_dictation(monkeypatch)
+    monkeypatch.setattr(d.models, "can_stream", lambda: False)
+    CountingStream.opened = 0
+    d.sd = types.SimpleNamespace(InputStream=CountingStream)
+    monkeypatch.setattr(d.live, "wait", lambda timeout=None: True)  # audio is fed by hand, after the beep
+    return d
+
+
+def speak(d, seconds=1.0):
+    d._capture(np.full((int(store.RATE * seconds), 1), 0.1, dtype=np.float32))
+
+
+def test_mic_kept_open_drops_audio_between_takes_and_reuses_the_mic(monkeypatch):
+    d = kept_open_dictation(monkeypatch, 30)
+    d.toggle()
+    speak(d)
+    d.toggle()
+    mic = d.mic
+    assert d.stream is None and mic is not None and not mic.closed  # still open after the take
+    speak(d)  # between takes: dropped as it arrives
+    assert d.chunks == []
+    d.toggle()  # the next take records from the open mic: nothing to wait for
+    assert CountingStream.opened == 1 and d.stream is mic
+    speak(d)
+    d.toggle()
+    assert d.pasted == ["take1", "take2"]
+
+
+def test_mic_kept_open_is_released_after_its_idle_time(monkeypatch):
+    d = kept_open_dictation(monkeypatch, 30)
+    d.toggle()
+    speak(d)
+    d.toggle()
+    mic = d.mic
+    d.release_idle_mic()
+    assert d.mic is mic and not mic.closed  # idle, but not for 30 minutes yet
+    d.mic_idle_since -= 31 * 60
+    d.release_idle_mic()
+    assert d.mic is None and mic.closed
+
+
+def test_mic_is_released_after_every_take_by_default(monkeypatch):
+    d = kept_open_dictation(monkeypatch, 0)
+    d.toggle()
+    speak(d)
+    mic = d.mic
+    d.toggle()
+    assert d.mic is None and mic.closed
+    d.toggle()
+    assert CountingStream.opened == 2
+
+
+def test_kept_open_mic_that_dropped_out_is_opened_again(monkeypatch):
+    d = kept_open_dictation(monkeypatch, 30)
+    d.toggle()
+    speak(d)
+    d.toggle()
+    old = d.mic
+    old.active = False  # e.g. unplugged, or PipeWire restarted, while idle
+    d.toggle()
+    assert old.closed and d.mic is not old and CountingStream.opened == 2
+
+
+def test_late_recording_notice_of_an_old_take_does_not_take_over_the_next(monkeypatch):
+    d = kept_open_dictation(monkeypatch, 30)
+    closed = []
+    monkeypatch.setattr(desktop, "close_notification", lambda nid: closed.append(nid))
+    monkeypatch.setattr(desktop, "notify", lambda msg, **kw: "old" if msg == "Recording…" else None)
+    with d.lock:
+        old_token = d._start(False)
+        d._stop(None)
+        d._start(False)  # the next take, on the same mic object
+    d.live.set()
+    d._announce(old_token, False)  # the first take's notice, shown late
+    assert d.indicator is None and closed == ["old"]

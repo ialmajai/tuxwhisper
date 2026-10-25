@@ -71,7 +71,11 @@ class Dictation:
         # Takes are transcribed and pasted one at a time, in the order they stopped.
         self.turn = threading.Condition()
         self.next_ticket = self.serving = 0
-        self.stream = None
+        self.stream = None  # the mic while a take records; None between takes
+        # The mic, which may stay open between takes (mic_open_minutes); audio is dropped then.
+        self.mic = None
+        self.mic_idle_since = 0.0
+        self.take = None  # the recording take's token: the mic is the same object for every take
         self.indicator = None  # ID of the on-screen recording notification
         self.hint = None  # the settings key shown under "Recording…"; see refresh_hint()
         self.last_hint = -HINT_EVERY
@@ -122,11 +126,31 @@ class Dictation:
         threading.Thread(target=self.toggle, args=(cut_at,), daemon=True).start()
 
     def _watch_idle(self):
-        """Free the speech model's GPU memory after the idle time set in the menu."""
+        """Free the speech model's GPU memory, and release the mic, after the idle times set
+        in the menu."""
         while True:
             time.sleep(15)
             self.unload_if_idle()
             self.restore_preferred_model()
+            self.release_idle_mic()
+
+    def release_idle_mic(self):
+        """Close a mic kept open between takes once it has been idle for mic_open_minutes."""
+        with self.lock:
+            if self.stream is None and self.mic is not None:
+                minutes = store.settings().mic_open_minutes
+                if not minutes or time.monotonic() - self.mic_idle_since > minutes * 60:
+                    self._close_mic()
+                    log.info(f"microphone released after {minutes} min without a take")
+
+    def _close_mic(self):
+        """Stop and close the mic (under self.lock), even if stopping fails."""
+        for step in (self.mic.stop, self.mic.close):
+            try:
+                step()
+            except Exception as e:  # noqa: BLE001 - e.g. the mic was unplugged mid-take
+                log.info(f"microphone error on stop: {e}")
+        self.mic = None
 
     def restore_preferred_model(self):
         """Go back to the chosen model when there's room, between takes rather than during one."""
@@ -137,7 +161,8 @@ class Dictation:
         self.models.unload_if_idle(store.settings().asr_unload_minutes, idle=self.stream is None)
 
     def _start(self, rewrite):
-        """Open the mic for a new take (under self.lock); the stream, or None if the mic failed."""
+        """Start recording a take (under self.lock), opening the mic unless it's still open from
+        the last one; the take's token, or None if the mic failed."""
         self.models.touch()
         threading.Thread(target=self.models.ensure_loaded, daemon=True).start()  # overlaps the speech
         self.chunks = []
@@ -147,59 +172,70 @@ class Dictation:
         # A cold load takes seconds, so overlap it with the speech; the cleanup skips its own
         # GPU check when the warm-up confirmed it.
         self.warming = self.background.submit(llm.warm_rewrite_model) if rewrite else None
+        if self.mic is not None and not getattr(self.mic, "active", True):
+            self._close_mic()  # dropped out while idle (unplugged, PipeWire restarted): reopen it
+        self.take = token = object()
         try:
-            stream = self.sd.InputStream(
-                samplerate=store.RATE, channels=1, dtype="float32",
-                callback=self._capture)
-            stream.start()
+            if self.mic is None:
+                mic = self.sd.InputStream(
+                    samplerate=store.RATE, channels=1, dtype="float32",
+                    callback=self._capture)
+                self.stream = mic  # before starting it: the take keeps audio from the first block
+                mic.start()
+                self.mic = mic
+            else:
+                self.stream = self.mic  # still open: recording starts with its next block
         except Exception as e:  # noqa: BLE001 - unplugged, busy or no mic: stay ready
+            self.stream = self.take = None
             log.info(f"microphone unavailable: {e}")
             desktop.notify("Microphone unavailable", body="Check that it's connected and not in use.",
                            level="error")
             return None
         finally:
             self.opening = False
-        self.stream, self.indicator = stream, None
+        self.indicator = None
         settings = store.settings()
         if settings.stream_long_takes and self.models.can_stream():
             self.long = LongTake(self.models, self.chunks, settings)
             self.long.start()
-        return stream
+        return token
 
     def _capture(self, data, frames=None, time_info=None, status=None):
-        """The mic's callback: keep each block, and count lost audio, which would otherwise only
-        show as a worse transcript."""
+        """The mic's callback: keep each block of a take, and count lost audio, which would
+        otherwise only show as a worse transcript. Between takes, with the mic kept open, each
+        block is dropped as it arrives: nothing is recorded."""
+        if self.stream is None:
+            return
         if status and status.input_overflow:
             self.dropped += 1
         self.chunks.append(data.copy())
         self.live.set()
 
-    def _announce(self, stream, rewrite):
+    def _announce(self, token, rewrite):
         """Beep and show "Recording…" outside self.lock: notify-send -p can take a while, and
         holding the lock would delay a quick stop. A stop that came first closes the notification.
         The beep waits for the mic's first audio (0.1-0.45 s after opening it), so words said
         after it are never lost."""
         self.live.wait(1)
-        if self.stream is stream:
+        if self.take is token:
             desktop.sound("device-added")
         nid = desktop.notify(f"Recording ({llm.current_mode()})…" if rewrite else "Recording…",
                              persistent=True, body=self.hint, icon=MIC_ICON)
         with self.lock:
-            if self.stream is stream:
+            if self.take is token:
                 self.indicator = nid
                 return
         desktop.close_notification(nid)
 
     def _stop(self, cut_at) -> TakeContext:
-        """Close the mic (under self.lock); the take, with what it needs captured now."""
+        """Stop recording (under self.lock), closing the mic unless it's kept open between
+        takes; the take, with what it needs captured now."""
         # Drop the audio recorded between the key release (cut_at) and now.
         excess = int(max(0.0, time.monotonic() - cut_at) * store.RATE) if cut_at else 0
-        for step in (self.stream.stop, self.stream.close):  # closed even if stopping failed
-            try:
-                step()
-            except Exception as e:  # noqa: BLE001 - e.g. the mic was unplugged mid-take
-                log.info(f"microphone error on stop: {e}")
-        self.stream = None
+        self.stream = self.take = None  # from here, the mic's blocks are dropped
+        self.mic_idle_since = time.monotonic()
+        if not store.settings().mic_open_minutes:
+            self._close_mic()
         indicator, self.indicator = self.indicator, None
         desktop.sound("device-removed")
         chunks, self.chunks = self.chunks, []
@@ -214,13 +250,13 @@ class Dictation:
     def toggle(self, cut_at=None, rewrite=False):
         with self.lock:
             if self.stream is None:
-                stream = self._start(rewrite)
+                token = self._start(rewrite)
                 take = None
             else:
                 take = self._stop(cut_at)
         if take is None:  # started (or the mic failed)
-            if stream is not None:
-                self._announce(stream, rewrite)
+            if token is not None:
+                self._announce(token, rewrite)
             return
         # Swap "Recording…" for "Transcribing…" in place: one notification, not a new popup.
         # Shown in the background: notify-send -p takes a while, and the take needn't wait.
