@@ -173,6 +173,16 @@ def test_notification_closed_while_its_banner_slides_in_closes_once_settled(monk
     assert closed_at[-1][0] == "13"
 
 
+def test_shortcut_installed_under_a_path_with_a_space_is_recognised(monkeypatch):
+    printed = {"custom-keybindings": "['/k/tuxwhisper-toggle/']", "binding": "'F5'",
+               "command": "\"'/home/a b/asr' toggle\""}  # gsettings double-quotes a value with a '
+    monkeypatch.setattr(desktop.subprocess, "run", lambda args, **k: types.SimpleNamespace(
+        returncode=0, stdout=printed[args[-1]] + "\n", stderr=""))
+    shortcuts = desktop.gnome_shortcuts()
+    assert shortcuts == {"/k/tuxwhisper-toggle/": ("F5", "'/home/a b/asr' toggle")}
+    assert desktop.our_shortcut(shortcuts, "toggle") == ("/k/tuxwhisper-toggle/", "F5")
+
+
 def test_plural():
     assert desktop.plural(1, "word", "words") == "1 word"
     assert desktop.plural(0, "word", "words") == "0 words"

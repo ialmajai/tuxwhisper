@@ -1,4 +1,5 @@
 """Desktop integration: notifications, sounds, the clipboard, GNOME shortcuts and dialogs."""
+import ast
 import contextlib
 import functools
 import os
@@ -134,10 +135,20 @@ def gnome_shortcuts() -> dict[str, tuple[str, str]] | None:
         return r.stdout.strip()
     try:
         paths = re.findall(r"'([^']+)'", get(MEDIA_KEYS, "custom-keybindings"))
-        return {p: tuple(get(f"{MEDIA_KEYS}.custom-keybinding:{p}", k).strip("'") for k in ("binding", "command"))
+        return {p: tuple(gvariant_string(get(f"{MEDIA_KEYS}.custom-keybinding:{p}", k)) for k in ("binding", "command"))
                 for p in paths}
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
+
+
+def gvariant_string(printed: str) -> str:
+    """A string as gsettings prints it: in single quotes, or double ones if it holds a single
+    quote (a path such as '/home/a b/asr', quoted for the shell, comes back as "'/home/a b/asr' x")."""
+    try:
+        value = ast.literal_eval(printed)
+    except (ValueError, SyntaxError):
+        return printed
+    return value if isinstance(value, str) else printed
 
 
 def runs_command(command: str, cmd: str) -> bool:
