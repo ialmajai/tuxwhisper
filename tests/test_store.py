@@ -19,6 +19,15 @@ def test_replacements(tmp_path):
     assert store.apply_replacements("commander") == "commander"  # whole words only
 
 
+def test_deletion_rule_keeps_the_words_around_it_apart(tmp_path):
+    (tmp_path / "replacements.txt").write_text("um =>\nnew line => \\n\n")
+    assert store.apply_replacements("Hello, um, world.") == "Hello, world."
+    assert store.apply_replacements("I um think so.") == "I think so."
+    assert store.apply_replacements("Um, I think so.") == "I think so."
+    assert store.apply_replacements("Yummy.") == "Yummy."  # whole words only
+    assert store.apply_replacements("New line. Hello.") == "\nHello."  # a leading line break stays
+
+
 def test_replacements_missing_file():
     assert store.apply_replacements("unchanged") == "unchanged"
 

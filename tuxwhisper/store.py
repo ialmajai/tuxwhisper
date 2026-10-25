@@ -131,11 +131,15 @@ def apply_replacements(text: str) -> str:
         spoken, written = spoken.strip(), written.strip().replace("\\n", "\n")
         # Whole words, any case. A line-break rule also eats the punctuation and spaces
         # Whisper puts around it ("Hello. New line. World." -> "Hello.\nWorld.").
+        # A deletion rule ("um =>") takes the space before the word and a comma after it
+        # ("Hello, um, world." -> "Hello, world.").
         pattern = r"\b" + re.escape(spoken) + r"\b"
-        if not written.strip():
+        if not written:
+            pattern = r"\s*" + pattern + r",?"
+        elif not written.strip():
             pattern = r"[ ,]*" + pattern + r"[.,]?[ ]*"
         text = re.sub(pattern, lambda _, w=written: w, text, flags=re.IGNORECASE)
-    return text
+    return text.lstrip(" ")  # a deleted first word leaves none
 
 
 def dataset_size(meta: str) -> tuple[int, float]:
