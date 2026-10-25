@@ -216,6 +216,24 @@ class WhisperCpp:
             return self.model.transcribe(audio, **params), types.SimpleNamespace(language=language)
 
 
+class DownloadError(OSError):
+    """A download that came out wrong: cut off, or not matching its checksum."""
+
+
+def download_failed(e: BaseException) -> bool:
+    """Whether e is a failed download (no network, a server error, a bad file), not a GPU or
+    library problem, which also show up as OSErrors (e.g. a CUDA library that won't load)."""
+    import urllib.error
+    kinds: list[type] = [DownloadError, urllib.error.URLError, TimeoutError]
+    with contextlib.suppress(ImportError):
+        import requests
+        kinds.append(requests.RequestException)
+    with contextlib.suppress(ImportError):
+        from huggingface_hub.errors import LocalEntryNotFoundError
+        kinds.append(LocalEntryNotFoundError)
+    return isinstance(e, tuple(kinds))
+
+
 def download_ggml(name: str) -> None:
     """Fetch whisper.cpp model name unless it's there. It goes to a .part file, renamed only
     once complete: pywhispercpp's own download saves under the final name, error page or cut
@@ -240,7 +258,7 @@ def download_ggml(name: str) -> None:
         got = f.tell()
     if expected and got != expected:
         os.remove(path + ".part")
-        raise OSError(f"the download of {name} stopped at {got} of {expected} bytes")
+        raise DownloadError(f"the download of {name} stopped at {got} of {expected} bytes")
     os.replace(path + ".part", path)
 
 
@@ -250,7 +268,7 @@ def download_verified(url: str, path: str, sha256: str, timeout: float = 60) -> 
     with urllib.request.urlopen(url, timeout=timeout) as r:
         data = r.read()
     if hashlib.sha256(data).hexdigest() != sha256:
-        raise OSError(f"{url} didn't match its checksum; not using it")
+        raise DownloadError(f"{url} didn't match its checksum; not using it")
     with open(path + ".part", "wb") as f:
         f.write(data)
     os.replace(path + ".part", path)
@@ -389,6 +407,10 @@ def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
                 desktop.notify(f"Couldn't load the speech model {attempt}", level="warn",
                                body=f"Using {default} instead. See the log: journalctl --user -u tuxwhisper")
                 continue
+            elif download_failed(e):  # e.g. a first start offline: not the GPU's fault
+                desktop.notify("Couldn't download the speech model", level="error",
+                               body="Check the internet connection, then: systemctl --user restart tuxwhisper")
+                raise ModelUnavailable(f"couldn't download {attempt} ({e})") from e
             elif DEVICE != "cpu":
                 desktop.notify("Dictation can't use the GPU", level="error",
                                body="See the log: journalctl --user -u tuxwhisper, or set ASR_DEVICE=cpu.")

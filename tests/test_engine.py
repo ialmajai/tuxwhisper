@@ -1,6 +1,7 @@
 """Tests for the speech models: whispered words, GPU memory and language detection."""
 import io
 import types
+import urllib.error
 
 import numpy as np
 import pytest
@@ -202,3 +203,19 @@ def test_ggml_model_already_there_is_not_downloaded_again(fake_ggml):
     reply["status"] = 500  # would fail if asked
     engine.download_ggml("base")
     assert path.read_bytes() == b"old"
+
+
+@pytest.mark.parametrize("error, notice", [
+    (urllib.error.URLError("no network"), "Couldn't download the speech model"),
+    (engine.DownloadError("didn't match its checksum"), "Couldn't download the speech model"),
+    (OSError("libcublas.so.12: cannot open shared object file"), "Dictation can't use the GPU"),
+])
+def test_failed_download_at_startup_isn_t_called_a_gpu_problem(monkeypatch, error, notice):
+    monkeypatch.setattr(engine, "DEVICE", "vulkan")
+    monkeypatch.setattr(engine, "model_downloaded", lambda name: True)
+    def load(name):
+        raise error
+    monkeypatch.setattr(engine, "load_whisper", load)
+    with pytest.raises(engine.ModelUnavailable):
+        engine.load_model()
+    assert notified[-1] == notice
