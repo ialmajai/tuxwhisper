@@ -296,7 +296,7 @@ def edit_file(path, title, header):
 
 # In groups: past transcripts, speech, LLM cleanup, then keys and sounds.
 SETTINGS = [
-    Setting("correct", "Correct last transcript", lambda s: "Fix…", action(lambda: correct_last()),
+    Setting("correct", "Correct last transcript", lambda s: "Fix…", action(lambda: correct_last_once()),
             "Fix the last transcript; TuxWhisper offers to remember the fix for next time"),
     Setting("history", "Recent transcripts", lambda s: f"{len(store.load_history())} this session", show_history,
             "Your last 20 transcripts; pick one to copy it again"),
@@ -395,6 +395,20 @@ def append_line(path, line, header):
 
 
 RETYPE_WITHIN = 600  # seconds after a dictation during which a correction retypes it in place
+
+
+def correct_last_once():
+    """correct_last() from the menu, unless F6 has a correction open: two at once would both
+    retype the same fix. The lock is let go when it closes, since the menu stays open."""
+    lock = store.instance_lock("correct")
+    if lock is False:
+        desktop.notify("A correction is already open")
+        return
+    try:
+        correct_last()
+    finally:
+        if lock:
+            lock.close()
 
 
 def correct_last():

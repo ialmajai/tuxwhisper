@@ -216,3 +216,17 @@ def test_settings_menu_saves_the_volume_then_previews_it(monkeypatch):
 def test_settings_menu_cancelled_dialog_saves_nothing(monkeypatch):
     drive_settings_menu(monkeypatch, ["language", "paste_key", "sound_volume"], [None, None, None])
     assert not os.path.exists(store.CONFIG)
+
+
+def test_menu_correction_waits_for_one_opened_with_the_key(monkeypatch):
+    opened = []
+    monkeypatch.setattr(menu, "correct_last", lambda: opened.append(True))
+    monkeypatch.setattr(store, "_instance_locks", [])
+    assert store.single_instance("correct")  # F6's correction window is open
+    menu.correct_last_once()
+    assert opened == [] and notified[-1] == "A correction is already open"
+    for f in store._instance_locks:
+        f.close()  # F6's window closed
+    menu.correct_last_once()
+    menu.correct_last_once()  # the menu's own lock was let go after the first
+    assert opened == [True, True]

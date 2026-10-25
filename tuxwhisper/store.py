@@ -52,17 +52,27 @@ _instance_locks = []  # held open (and so locked) until the process exits
 def single_instance(name: str) -> bool:
     """Whether this is the only process running name (e.g. a dialog): False if another one
     holds its lock. A key held down re-runs its shortcut, which would open a window per repeat."""
+    lock = instance_lock(name)
+    if lock is False:
+        return False
+    if lock is not None:
+        _instance_locks.append(lock)
+    return True
+
+
+def instance_lock(name: str):
+    """name's lock, held until the returned file is closed (or the process exits); False if
+    another process holds it; None if there's nowhere to keep locks."""
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime:
-        return True
+        return None
     f = open(os.path.join(runtime, f"{APP}-{name}.lock"), "a")  # noqa: SIM115 - held open: it is the lock
     try:
         fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         f.close()
         return False
-    _instance_locks.append(f)
-    return True
+    return f
 
 
 def atomic_write(path: str, text: str) -> None:
