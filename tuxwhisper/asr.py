@@ -69,6 +69,8 @@ def main():
     elif cmd in ("toggle", "rewrite", "save"):  # every key press: import only the socket client
         from tuxwhisper import client
         client.send(cmd)
+    elif cmd in ("settings", "correct") and not store.single_instance(cmd):
+        pass  # already open: a repeat press, or the key held down
     elif cmd == "settings":
         from tuxwhisper import menu
         menu.with_service_env()

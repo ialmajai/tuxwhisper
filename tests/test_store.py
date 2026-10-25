@@ -106,3 +106,16 @@ def test_dataset_size_counts_the_listed_recordings_by_file_size(monkeypatch):
     first = min(n for n in os.listdir(store.RECORDINGS) if n.endswith(".wav"))
     os.remove(os.path.join(store.RECORDINGS, first))
     assert store.dataset_size(meta) == (1, 2.0)  # deleted by hand
+
+
+def test_only_one_instance_of_a_dialog_runs(monkeypatch):
+    held = []
+    monkeypatch.setattr(store, "_instance_locks", held)
+    assert store.single_instance("correct")
+    assert not store.single_instance("correct")  # a repeat press while it's open
+    assert store.single_instance("settings")     # other dialogs are independent
+    for f in held:
+        f.close()  # what the process exiting does
+    assert store.single_instance("correct")
+    for f in held:
+        f.close()

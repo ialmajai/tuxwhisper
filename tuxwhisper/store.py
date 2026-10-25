@@ -46,6 +46,25 @@ def file_lock(path):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+_instance_locks = []  # held open (and so locked) until the process exits
+
+
+def single_instance(name: str) -> bool:
+    """Whether this is the only process running name (e.g. a dialog): False if another one
+    holds its lock. A key held down re-runs its shortcut, which would open a window per repeat."""
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if not runtime:
+        return True
+    f = open(os.path.join(runtime, f"{APP}-{name}.lock"), "a")  # noqa: SIM115 - held open: it is the lock
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        f.close()
+        return False
+    _instance_locks.append(f)
+    return True
+
+
 def atomic_write(path: str, text: str) -> None:
     """Replace path's contents in one step: a reader never sees a half-written file, and a
     crash mid-write leaves the old file instead of a truncated one."""
