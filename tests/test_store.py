@@ -41,6 +41,27 @@ def test_settings_reject_bad_values():
     assert s.mode_models == {}
 
 
+def test_settings_of_the_wrong_type_fall_back_to_their_defaults():
+    with open(store.CONFIG, "w") as f:
+        f.write('language = ["en"]\npaste_key = ["ctrl+v"]\nsounds = "no"\nstream_long_takes = 0\n'
+                'rewrite_model = 5\nasr_model = 3\nmode = 1\nasr_unload_minutes = true\n'
+                'mode_models = {"Clean up" = 5, "Email" = "qwen3"}\n')
+    s = store.settings()  # a hand-edited file must never stop the daemon or the menu
+    assert (s.language, s.paste_key, s.sounds, s.stream_long_takes) == ("", "shift+insert", True, True)
+    assert (s.rewrite_model, s.asr_model, s.mode, s.asr_unload_minutes) == ("llama3.2", "", "Clean up", 30)
+    assert s.mode_models == {"Email": "qwen3"}
+
+
+def test_settings_file_that_isn_t_utf8_counts_as_unreadable(monkeypatch):
+    monkeypatch.delattr(store.read_config, "warned", raising=False)
+    with open(store.CONFIG, "wb") as f:
+        f.write(b'mode = "\xff\xfe"\n')
+    assert store.read_config() == {} and store.settings().mode == "Clean up"
+    assert notified == ["Settings file is unreadable; using defaults"]
+    store.save_settings({"sounds": False})  # the unreadable file is kept, not overwritten
+    assert any(".unreadable-" in n for n in os.listdir(os.path.dirname(store.CONFIG)))
+
+
 def test_settings_clamp_volume():
     with open(store.CONFIG, "w") as f:
         f.write("sound_volume = 250\n")

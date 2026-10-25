@@ -85,7 +85,7 @@ def read_config() -> dict[str, object]:
             return tomllib.load(f)
     except FileNotFoundError:
         return {}
-    except tomllib.TOMLDecodeError as e:
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError) as e:
         if not getattr(read_config, "warned", False):
             read_config.warned = True
             print(f"{CONFIG} is unreadable ({e}); using default settings", flush=True)
@@ -254,7 +254,7 @@ def save_settings(s: dict[str, object]) -> None:
     try:
         with open(CONFIG, "rb") as f:
             tomllib.load(f)
-    except tomllib.TOMLDecodeError:  # keep what can't be read, instead of overwriting it
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError):  # keep what can't be read, instead of overwriting it
         os.replace(CONFIG, f"{CONFIG}.unreadable-{time.strftime('%Y%m%d-%H%M%S')}")
     except FileNotFoundError:
         pass

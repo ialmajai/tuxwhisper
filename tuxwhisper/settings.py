@@ -37,15 +37,14 @@ class Settings:
              "rewrite_model": env.get("ASR_REWRITE_MODEL", "llama3.2"), "mode": "Clean up",
              "asr_model": env.get("ASR_MODEL", ""), "asr_unload_minutes": 30, "llm_unload_minutes": 30,
              "mode_models": {}, "stream_long_takes": env.get("ASR_STREAM", "1") != "0"}
-        s.update({k: v for k, v in raw.items() if k in s})
+        s.update({k: v for k, v in raw.items() if k in s and cls._fits(k, v)})
         try:
             s["sound_volume"] = min(max(int(s["sound_volume"]), 0), 100)
         except (TypeError, ValueError):
             s["sound_volume"] = 40
         if s["paste_key"] not in PASTE_KEYS:
             s["paste_key"] = "shift+insert"
-        if not isinstance(s["mode_models"], dict):
-            s["mode_models"] = {}
+        s["mode_models"] = {k: v for k, v in s["mode_models"].items() if isinstance(v, str)}
         for key, low in (("asr_unload_minutes", 0), ("llm_unload_minutes", -1)):
             if not isinstance(s[key], int) or isinstance(s[key], bool) or s[key] < low:
                 s[key] = 30
@@ -54,3 +53,11 @@ class Settings:
         if s["language"] not in LANGUAGES:  # also catches a wrong type from a hand-edited config
             s["language"] = ""
         return cls(**s)
+
+    @classmethod
+    def _fits(cls, name: str, value: Any) -> bool:
+        """Whether a config value has its setting's type (a bool isn't an int here)."""
+        kind = cls.__dataclass_fields__[name].type
+        if kind is int:
+            return isinstance(value, int) and not isinstance(value, bool)
+        return isinstance(value, dict if kind == dict[str, str] else kind)
