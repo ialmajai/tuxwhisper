@@ -13,6 +13,22 @@ def test_llm_keep_alive(minutes, keep_alive):
     assert llm.llm_keep_alive() == keep_alive
 
 
+@pytest.mark.parametrize("minutes", [0, 30])
+def test_loading_keeps_the_model_for_the_cleanup_even_when_unloading_right_after_use(monkeypatch, minutes):
+    with open(store.CONFIG, "w") as f:
+        f.write(f"llm_unload_minutes = {minutes}\n")
+    loaded = []
+    def ollama(path, payload=None, timeout=30):  # like Ollama: keep_alive "0m" unloads at once
+        if path == "/api/ps":
+            return {"models": [{"name": "llama3.2:latest", "size": 2, "size_vram": 2}] if loaded else []}
+        if payload.get("keep_alive") not in (0, "0m"):
+            loaded.append(payload["keep_alive"])
+        return {}
+    monkeypatch.setattr(llm, "ollama", ollama)
+    assert llm.rewrite_model_on_gpu()  # loaded and on the GPU, not "not enough GPU memory"
+    assert loaded == ["5m" if minutes == 0 else f"{minutes}m"]
+
+
 @pytest.mark.parametrize("text, cued", [
     ("let's meet on tuesday no wait wednesday", True),
     ("send it to john sorry i mean mike", True),

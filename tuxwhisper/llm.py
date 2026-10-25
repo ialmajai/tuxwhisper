@@ -79,8 +79,11 @@ def rewrite_model_on_gpu() -> bool:
         return next((m for m in ollama("/api/ps")["models"] if m["name"] == name), None)
     m = loaded()
     if m is None:  # an empty generate request just loads the model
+        # Kept for the cleanup that follows even when set to unload right after use, which
+        # would unload it as soon as it loaded; the cleanup's own request unloads it.
+        keep = llm_keep_alive()
         try:
-            ollama("/api/generate", {"model": model, "keep_alive": llm_keep_alive(),
+            ollama("/api/generate", {"model": model, "keep_alive": "5m" if keep == "0m" else keep,
                                      "options": OLLAMA_OPTIONS})
         except urllib.error.HTTPError as e:
             if b"out of memory" in e.read():
