@@ -117,6 +117,9 @@ class SpeechModel(Protocol):
     # Whether segments carry .words with .word, .start and .end (seconds) when asked for them,
     # which transcribing long takes in parts while they're recorded needs.
     word_timestamps: bool
+    # Whether vad_filter=False really turns the voice filter off, which retrying a whispered
+    # take needs; otherwise the retry would only run the same transcription again.
+    vad_optional: bool
 
     def transcribe(self, audio: Any, *, language: str | None = None, prompt: str | None = None,
                    hotwords: str | None = None, vad_filter: bool = True,
@@ -138,6 +141,7 @@ class SpeechModel(Protocol):
 class FasterWhisperModel:
     """faster-whisper (CTranslate2) on an NVIDIA GPU or the CPU."""
     word_timestamps = True
+    vad_optional = True
 
     def __init__(self, name: str):
         from faster_whisper import WhisperModel
@@ -167,6 +171,7 @@ class FasterWhisperModel:
 class WhisperCpp:
     """whisper.cpp on a Vulkan GPU (AMD, Intel or NVIDIA)."""
     word_timestamps = False  # pywhispercpp's segments have none: long takes are transcribed whole
+    vad_optional = False  # it always runs its voice filter (see transcribe)
 
     def __init__(self, name: str):
         from pywhispercpp.constants import MODELS_DIR
@@ -574,7 +579,7 @@ class ModelManager:
         filter."""
         segments, lang, english = self._first_pass(audio, settings)
         text = " ".join(s.text.strip() for s in segments).strip()
-        if (not text and sound_seconds(audio, store.RATE) >= MIN_SOUND
+        if (not text and getattr(self.model, "vad_optional", True) and sound_seconds(audio, store.RATE) >= MIN_SOUND
                 and len(audio) <= RETRY_MAX_SECONDS * store.RATE):
             # The filter heard no voice in a take with sound: likely whispered. Try without
             # it, keeping the result only if it fits the sound (Whisper may invent a phrase).

@@ -529,6 +529,17 @@ def test_fast_speech_found_by_the_retry_without_the_prompt_is_kept(monkeypatch):
     assert d.pasted == [said]
 
 
+def test_whispered_take_is_not_retried_by_an_engine_that_always_filters(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.models.model = WhisperedModel("Yes.")
+    d.models.model.vad_optional = False  # like whisper.cpp: the retry would be the same pass again
+    calls = []
+    real = d.models.model.transcribe
+    d.models.model.transcribe = lambda audio, **kw: calls.append(kw.get("vad_filter")) or real(audio, **kw)
+    d.pipeline.run(pipeline.TakeContext([burst(0.4)[:, None]]))
+    assert calls == [True] and d.pasted == []
+
+
 def test_silence_is_not_retried(monkeypatch):
     d = make_dictation(monkeypatch)
     d.models.model = WhisperedModel("You")
