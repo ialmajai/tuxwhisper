@@ -12,7 +12,8 @@ fi
 # with TUXWHISPER_SLOW set, whenever the daemon isn't there to take the command.
 KEY="$DIR/client-rs/target/release/tuxwhisper-key"
 case "${1:-}" in toggle|rewrite|save)
-    if [ -z "${TUXWHISPER_SLOW:-}" ] && [ -x "$KEY" ]; then
+    # Not a binary older than its source (after a git pull, until install.sh rebuilds it).
+    if [ -z "${TUXWHISPER_SLOW:-}" ] && [ -x "$KEY" ] && [ "$KEY" -nt "$DIR/client-rs/src/main.rs" ]; then
         TUXWHISPER_CMD="$DIR/asr" exec "$KEY" "$@"
     fi ;;
 esac

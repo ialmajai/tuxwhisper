@@ -39,8 +39,10 @@ fn send(cmd: &str) -> io::Result<bool> {
 }
 
 fn main() {
-    let cmd = env::args().nth(1).unwrap_or_default();
-    if COMMANDS.contains(&cmd.as_str()) && matches!(send(&cmd), Ok(true)) {
+    // args_os: an argument that isn't UTF-8 goes to the Python client, rather than panicking.
+    let cmd = env::args_os().nth(1);
+    let cmd = cmd.as_ref().and_then(|c| c.to_str()).unwrap_or_default();
+    if COMMANDS.contains(&cmd) && matches!(send(cmd), Ok(true)) {
         return;
     }
     let Some(python_client) = env::var_os("TUXWHISPER_CMD") else {

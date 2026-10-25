@@ -7,6 +7,8 @@ import time
 
 import pytest
 
+from tuxwhisper import store
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KEY = os.path.join(ROOT, "client-rs", "target", "release", "tuxwhisper-key")
 pytestmark = pytest.mark.skipif(not os.access(KEY, os.X_OK), reason="client-rs isn't built (cargo build --release)")
@@ -16,7 +18,7 @@ def fake_daemon(runtime, reply_after=0.0):
     """Listen on the daemon's socket in runtime; returns the list each received command goes to."""
     got = []
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(os.path.join(runtime, "tuxwhisper.sock"))
+    server.bind(os.path.join(runtime, f"{store.APP}.sock"))  # where the Python client looks
     server.listen()
     def serve():
         conn, _ = server.accept()
@@ -67,6 +69,11 @@ def test_other_commands_go_to_the_python_client(tmp_path):
     got = fake_daemon(str(tmp_path))
     run([KEY, "settings"], tmp_path)
     assert got == [] and (tmp_path / "fallback").read_text().strip() == "1 settings"
+
+
+def test_argument_that_isn_t_utf8_goes_to_the_python_client(tmp_path):
+    r = run([KEY, b"a\xffb"], tmp_path)
+    assert r.returncode == 0 and (tmp_path / "fallback").exists()  # no panic
 
 
 def test_wrapper_sends_key_presses_through_the_rust_client(tmp_path):
