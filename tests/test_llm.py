@@ -105,3 +105,18 @@ def test_modes_file_skips_comments_and_half_written_lines():
     found = llm.modes()
     assert found["Tweet"] == "Rewrite as a tweet."
     assert not {"# Indented", "", "No task"} & found.keys()
+
+
+@pytest.mark.parametrize("model, listed", [
+    ("llama3.2", "llama3.2:latest"),
+    ("qwen3:8b", "qwen3:8b"),
+    ("localhost:5000/team/m", "localhost:5000/team/m:latest"),  # a registry's port isn't a tag
+])
+def test_gpu_check_finds_the_model_ollama_lists(monkeypatch, model, listed):
+    with open(store.CONFIG, "w") as f:
+        f.write(f'rewrite_model = "{model}"\n')
+    def ollama(path, payload=None, timeout=30):
+        assert path == "/api/ps", "already loaded: nothing to load or unload"
+        return {"models": [{"name": listed, "size": 2, "size_vram": 2}]}
+    monkeypatch.setattr(llm, "ollama", ollama)
+    assert llm.rewrite_model_on_gpu()

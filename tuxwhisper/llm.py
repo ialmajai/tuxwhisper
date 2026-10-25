@@ -77,7 +77,9 @@ def rewrite_model_on_gpu() -> bool:
     Running on the CPU makes cleanup slow, so a model that doesn't fit is not used.
     """
     model = mode_model()
-    name = model if ":" in model else model + ":latest"
+    # Ollama lists a model with its tag; one named without gets ":latest". A tag comes after the
+    # last "/": the colon in a registry's host:port isn't one.
+    name = model if ":" in model.rsplit("/", 1)[-1] else model + ":latest"
     def loaded():
         return next((m for m in ollama("/api/ps")["models"] if m["name"] == name), None)
     m = loaded()
