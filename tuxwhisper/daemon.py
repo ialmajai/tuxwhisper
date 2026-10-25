@@ -106,10 +106,18 @@ class Dictation:
     def _watch_release(self):
         while True:
             time.sleep(0.05)
-            if self.held and time.monotonic() - self.last_press > self.RELEASE_GAP:
-                self.held = False
-                cut_at = self.last_press + self.RELEASE_TAIL
-                threading.Thread(target=self.toggle, args=(cut_at,), daemon=True).start()
+            self.check_release()
+
+    def check_release(self):
+        """Stop a held take once its key stops repeating. The repeat burst ends with it: a press
+        right after letting go starts a new take rather than counting as one more repeat."""
+        with self.press_lock:
+            if not (self.held and time.monotonic() - self.last_press > self.RELEASE_GAP):
+                return
+            self.held = False
+            cut_at = self.last_press + self.RELEASE_TAIL
+            self.last_press = 0.0
+        threading.Thread(target=self.toggle, args=(cut_at,), daemon=True).start()
 
     def _watch_idle(self):
         """Free the speech model's GPU memory after the idle time set in the menu."""

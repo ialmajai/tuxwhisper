@@ -293,6 +293,33 @@ def test_history_records_whether_the_take_was_typed(monkeypatch):
     assert store.load_history()[-1]["typed"] is False
 
 
+def test_press_right_after_a_hold_ends_starts_a_new_take(monkeypatch):
+    d = make_dictation(monkeypatch)
+    monkeypatch.setattr(d.models, "can_stream", lambda: False)
+    clock = [100.0]
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: clock[0])
+
+    def until(cond):
+        deadline = time.time() + 5
+        while not cond() and time.time() < deadline:
+            time.sleep(0.01)
+        assert cond()
+
+    d.press()  # the key goes down: a take starts
+    until(lambda: d.stream is not None)
+    for t in (100.5, 100.6, 100.7):  # GNOME's auto-repeat while the key is held
+        clock[0] = t
+        d.press()
+    assert d.held
+    clock[0] = 101.1  # no repeat for RELEASE_GAP: the key was let go
+    d.check_release()
+    until(lambda: d.stream is None)
+    clock[0] = 101.3  # pressed again within REPEAT_WINDOW of the last repeat
+    d.press()
+    until(lambda: d.stream is not None)  # a new take, not a repeat of the old one
+    d.toggle()
+
+
 def test_start_beep_waits_for_the_mic_s_first_audio(monkeypatch):
     d = make_dictation(monkeypatch)
     beeps = []
