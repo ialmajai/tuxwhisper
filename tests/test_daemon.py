@@ -272,9 +272,15 @@ def test_retype_refuses_once_a_newer_dictation_was_pasted(monkeypatch, tmp_path)
     assert not d.retype() and d.paster.kbd.keys == []  # the newer text is left alone
 
 
-def test_typed_length_counts_characters_not_accents():
-    assert daemon.typed_length("café") == 4
-    assert daemon.typed_length("café") == 4
+@pytest.mark.parametrize("text, presses", [
+    ("caf\u00e9", 4),
+    ("cafe\u0301", 4),          # e + combining accent: one letter in GTK
+    ("\u0442\u0435\u0441\u0442", 4),  # Cyrillic
+    ("\u0928\u092e\u0938\u094d\u0924\u0947", 6),  # Hindi: the virama and vowel sign each a BackSpace
+    ("\u0645\u064e\u0631\u0652\u062d\u064e\u0628\u064b\u0627", 9),  # Arabic vowel marks too
+])
+def test_typed_length_counts_backspaces_as_gtk_erases(text, presses):
+    assert daemon.typed_length(text) == presses
 
 
 def test_failed_take_is_reported_and_the_next_one_works(monkeypatch):

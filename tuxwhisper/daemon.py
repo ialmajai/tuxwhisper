@@ -288,6 +288,20 @@ class Dictation:
                 self.turn.notify_all()
 
 
+# Scripts whose letter and its combining accents GTK (Pango) erases with one BackSpace; in
+# others, such as Arabic with vowel marks or Hindi, each BackSpace erases one code point.
+WHOLE_CLUSTER_SCRIPTS = {"LATIN", "GREEK", "CYRILLIC", "HIRAGANA", "KATAKANA", "HANGUL"}
+
+
 def typed_length(text):
-    """How many BackSpaces erase text: one per character, not per combining accent."""
-    return sum(1 for c in text if not unicodedata.combining(c))
+    """How many BackSpaces erase text in a GTK app: one per character, an accented Latin,
+    Greek or Cyrillic letter counting once, but each mark counting in other scripts."""
+    count, script = 0, ""
+    for c in text:
+        if unicodedata.combining(c):
+            if script in WHOLE_CLUSTER_SCRIPTS:
+                continue
+        else:
+            script = unicodedata.name(c, "").split(" ")[0]
+        count += 1
+    return count
