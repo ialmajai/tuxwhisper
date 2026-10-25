@@ -337,6 +337,33 @@ def test_press_right_after_a_hold_ends_starts_a_new_take(monkeypatch):
     d.toggle()
 
 
+def test_tap_to_stop_while_the_mic_is_still_opening_stops_the_take(monkeypatch):
+    d = make_dictation(monkeypatch)
+    monkeypatch.setattr(d.models, "can_stream", lambda: False)
+    clock = [100.0]
+    monkeypatch.setattr(daemon.time, "monotonic", lambda: clock[0])
+    opening, go_on = threading.Event(), threading.Event()
+    real_stream = d.sd.InputStream
+    def slow_stream(**kw):  # the mic takes a while to open
+        opening.set()
+        assert go_on.wait(5)
+        return real_stream(**kw)
+    d.sd = types.SimpleNamespace(InputStream=slow_stream)
+    d.press()  # tap: start
+    assert opening.wait(5)
+    clock[0] = 100.3
+    d.press()  # tap again, before the mic is open
+    go_on.set()
+    deadline = time.time() + 5
+    while d.stream is None and time.time() < deadline:
+        time.sleep(0.01)
+    clock[0] = 100.7  # no more presses: the watcher ends it
+    d.check_release()
+    while d.stream is not None and time.time() < deadline:
+        time.sleep(0.01)
+    assert d.stream is None  # stopped, not left recording until the next press
+
+
 def test_start_beep_waits_for_the_mic_s_first_audio(monkeypatch):
     d = make_dictation(monkeypatch)
     beeps = []

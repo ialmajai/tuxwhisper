@@ -81,6 +81,7 @@ class Dictation:
         self.long: LongTake | None = None  # the take being recorded, transcribed while it runs long
         self.last_press = 0.0
         self.held = False
+        self.opening = False  # a press is opening the mic for a new take, which can take 0.4 s
         self.rewrite = False  # the current take's mode, set by the key that started it
         # The cleanup model's warm-up for the current take, if it's a cleanup one.
         self.warming: Future | None = None
@@ -97,10 +98,11 @@ class Dictation:
             now = time.monotonic()
             is_repeat = now - self.last_press < self.REPEAT_WINDOW
             self.last_press = now
-            if is_repeat:
-                self.held = self.stream is not None
+            if is_repeat:  # also while the mic is still opening: a quick second tap must stop it
+                self.held = self.stream is not None or self.opening
                 return
             self.held = False
+            self.opening = self.stream is None
         threading.Thread(target=self.toggle, kwargs={"rewrite": rewrite}, daemon=True).start()
 
     def _watch_release(self):
@@ -155,6 +157,8 @@ class Dictation:
             desktop.notify("Microphone unavailable", body="Check that it's connected and not in use.",
                            level="error")
             return None
+        finally:
+            self.opening = False
         self.stream, self.indicator = stream, None
         settings = store.settings()
         if settings.stream_long_takes and self.models.can_stream():
