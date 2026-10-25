@@ -87,9 +87,7 @@ def download_asr_model(name):
                          + "Keep dictating; TuxWhisper switches when it's done.</i>")
     try:
         if engine.DEVICE == "vulkan":
-            from pywhispercpp.utils import download_model
-            if not download_model(name):
-                raise ValueError(f"unknown model {name}")
+            engine.download_ggml(name)
         else:
             from faster_whisper.utils import download_model
             download_model(name)

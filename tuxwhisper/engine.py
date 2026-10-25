@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -180,6 +181,7 @@ class WhisperCpp:
 
     def load(self):
         from pywhispercpp.model import Model
+        download_ggml(self.name)  # not pywhispercpp's download, which can keep a broken file
         self.model = Model(self.name, print_progress=False, print_realtime=False,
                            redirect_whispercpp_logs_to=None)
 
@@ -207,6 +209,34 @@ class WhisperCpp:
             language = language or self.model.auto_detect_language(audio)[0][0]
             params["language"] = language
             return self.model.transcribe(audio, **params), types.SimpleNamespace(language=language)
+
+
+def download_ggml(name: str) -> None:
+    """Fetch whisper.cpp model name unless it's there. It goes to a .part file, renamed only
+    once complete: pywhispercpp's own download saves under the final name, error page or cut
+    off (logout, out-of-memory kill), and a file there counts as the model from then on."""
+    from pywhispercpp.constants import (
+        AVAILABLE_MODELS,
+        MODELS_BASE_URL,
+        MODELS_DIR,
+        MODELS_PREFIX_URL,
+    )
+    if name not in AVAILABLE_MODELS:
+        raise ValueError(f"unknown model {name}")
+    path = os.path.join(MODELS_DIR, f"ggml-{name}.bin")
+    if os.path.exists(path):
+        return
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    # urlopen raises on an HTTP error status, so an error page is never saved.
+    with (urllib.request.urlopen(f"{MODELS_BASE_URL}/{MODELS_PREFIX_URL}-{name}.bin", timeout=60) as r,
+          open(path + ".part", "wb") as f):
+        expected = int(r.headers.get("Content-Length") or 0)
+        shutil.copyfileobj(r, f, 1 << 20)
+        got = f.tell()
+    if expected and got != expected:
+        os.remove(path + ".part")
+        raise OSError(f"the download of {name} stopped at {got} of {expected} bytes")
+    os.replace(path + ".part", path)
 
 
 def download_verified(url: str, path: str, sha256: str, timeout: float = 60) -> None:

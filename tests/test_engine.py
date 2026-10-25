@@ -1,5 +1,6 @@
 """Tests for the speech models: whispered words, GPU memory and language detection."""
 import io
+import types
 
 import numpy as np
 import pytest
@@ -157,3 +158,47 @@ def test_missing_speech_library_is_reported_not_exited(monkeypatch):
     monkeypatch.setattr(engine, "load_whisper", missing)
     with pytest.raises(engine.ModelUnavailable, match="faster_whisper is missing"):
         engine.load_model()
+
+
+@pytest.fixture
+def fake_ggml(monkeypatch, tmp_path):
+    """pywhispercpp's constants (its library isn't loaded in tests) and a fake model server;
+    the server's reply is set as (status, announced length, body)."""
+    import io
+    import sys
+    import urllib.error
+    monkeypatch.setitem(sys.modules, "pywhispercpp.constants", types.SimpleNamespace(
+        AVAILABLE_MODELS=["base"], MODELS_BASE_URL="https://hf.example", MODELS_DIR=str(tmp_path),
+        MODELS_PREFIX_URL="resolve/main/ggml"))
+    reply = {"status": 200, "length": 6, "body": b"ggml.."}
+    def urlopen(url, timeout=None):
+        if reply["status"] != 200:
+            raise urllib.error.HTTPError(url, reply["status"], "error", {}, io.BytesIO(b"<html>"))
+        r = io.BytesIO(reply["body"])
+        r.headers = {"Content-Length": str(reply["length"])}
+        return r
+    monkeypatch.setattr(engine.urllib.request, "urlopen", urlopen)
+    return reply, tmp_path / "ggml-base.bin"
+
+
+def test_ggml_download_is_saved_only_once_complete(fake_ggml):
+    _, path = fake_ggml
+    engine.download_ggml("base")
+    assert path.read_bytes() == b"ggml.." and not path.with_suffix(".bin.part").exists()
+
+
+@pytest.mark.parametrize("status, length", [(200, 1000), (404, 6)])
+def test_failed_ggml_download_leaves_no_model_file(fake_ggml, status, length):
+    reply, path = fake_ggml
+    reply.update(status=status, length=length)  # cut off part-way, or an error page
+    with pytest.raises(OSError):
+        engine.download_ggml("base")
+    assert not path.exists() and not path.with_suffix(".bin.part").exists()
+
+
+def test_ggml_model_already_there_is_not_downloaded_again(fake_ggml):
+    reply, path = fake_ggml
+    path.write_bytes(b"old")
+    reply["status"] = 500  # would fail if asked
+    engine.download_ggml("base")
+    assert path.read_bytes() == b"old"
