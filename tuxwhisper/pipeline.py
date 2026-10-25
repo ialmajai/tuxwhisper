@@ -85,8 +85,6 @@ class TakePipeline:
         audio, status = take.audio(self.np), take.status
         if len(audio) < store.RATE * 0.3:  # too short to be speech; Whisper hallucinates on these
             return
-        # Read the clipboard to restore after the paste while the take transcribes.
-        snapshot = self.paster.snapshot_clipboard() if self.paster.kbd is not None else None
         if take.dropped:
             log.info(f"  audio lost {take.dropped} times while recording (input overflow)")
             desktop.notify("Some audio was lost while recording",
@@ -119,7 +117,7 @@ class TakePipeline:
         text = store.apply_replacements(text)
         end_status(status)
         t2 = time.time()
-        typed = self.paster.paste(text + " ", snapshot)
+        typed = self.paster.paste(text + " ")
         parts = f" ({take.long.passes} passes while speaking, {take.long.tail:.1f}s tail)" if streamed else ""
         log.info(f"  timing: transcribe {t_asr:.2f}s{parts}, cleanup {t_cleanup:.2f}s, paste {time.time() - t2:.2f}s;"
                  f" {time.monotonic() - take.stopped_at:.2f}s from stop to pasted")
@@ -197,46 +195,53 @@ class Paster:
     """Puts text at the cursor through the clipboard and a paste key on the virtual keyboard,
     then gives the clipboard back its old contents."""
 
+    # Seconds before the old clipboard goes back: the app fetches the pasted text after the
+    # key, and a busy one (or an XWayland one) can take a few hundred ms.
+    RESTORE_AFTER = 0.75
+
     def __init__(self, kbd: Any, ec: Any):
         """kbd: the virtual keyboard (None: copy instead of typing); ec: evdev's ecodes."""
         self.kbd, self.ec = kbd, ec
+        # Held from reading the clipboard until it's restored: the next paste waits, or it
+        # would read this paste's text and put that back instead of yours.
+        self.clipboard = threading.Lock()
 
-    def snapshot_clipboard(self):
-        """Start reading the selections the paste key overwrites; paste() takes the result."""
-        selections = paste_selections(store.settings().paste_key)
-        saved = {}
-        thread = threading.Thread(target=lambda: saved.update(read_selections(selections)), daemon=True)
-        thread.start()
-        return thread, saved
-
-    def paste(self, text: str, snapshot=None) -> bool:
+    def paste(self, text: str) -> bool:
         """Type text at the cursor; True if it was typed, False if it was only copied (or not even that).
-        snapshot is snapshot_clipboard()'s, taken before the take was transcribed."""
+        The clipboard is read just before, so something copied while the take was transcribed is
+        what comes back, and restored in the background a moment after."""
         # Clipboard + a paste shortcut handles any Unicode and works on X11 and Wayland.
         if self.kbd is None:
             if desktop.clipboard_set(text):
                 desktop.notify("Copied", body="Paste it with Ctrl+V.")
             else:
-                desktop.notify(*COPY_FAILED, level="error")
+                desktop.notify(COPY_FAILED[0], body=COPY_FAILED[1], level="error")
             return False
         paste_key = store.settings().paste_key
         keys = [getattr(self.ec, k) for k in store.PASTE_KEYS[paste_key]]
         selections = paste_selections(paste_key)
-        saved = {}
-        if snapshot:
-            thread, saved = snapshot
-            thread.join()
-        # The paste key may have changed since the snapshot: read what it didn't.
-        saved.update(read_selections([sel for sel in selections if sel not in saved]))
-        saved = {sel: saved[sel] for sel in selections}
-        if not all(write_selections({sel: text for sel in saved}).values()):  # pasting now would paste old text
-            desktop.notify(*COPY_FAILED, level="error")
-            return False
-        time.sleep(0.05)
-        self.press(keys)
-        time.sleep(0.3)  # the app fetches the clipboard asynchronously after the paste
-        write_selections({sel: old for sel, old in saved.items() if old is not None})
+        self.clipboard.acquire()
+        try:
+            saved = in_parallel(desktop.clipboard_save, selections)
+            if not all(write_selections({sel: text for sel in selections}).values()):
+                restore_selections(saved)  # pasting now would paste old text; don't lose yours
+                desktop.notify(COPY_FAILED[0], body=COPY_FAILED[1], level="error")
+                self.clipboard.release()
+                return False
+            time.sleep(0.05)
+            self.press(keys)
+        except BaseException:
+            self.clipboard.release()
+            raise
+        threading.Thread(target=self._restore, args=(saved,), daemon=True).start()
         return True
+
+    def _restore(self, saved):
+        try:
+            time.sleep(self.RESTORE_AFTER)
+            restore_selections(saved)
+        finally:
+            self.clipboard.release()
 
     def press(self, keys):
         """Press keys together, then release them in reverse order."""
@@ -274,8 +279,9 @@ def in_parallel(fn, items):
     return out
 
 
-def read_selections(selections):
-    return in_parallel(desktop.clipboard_get, selections)
+def restore_selections(saved):
+    """Put back what desktop.clipboard_save() read from each selection (None: it was empty)."""
+    in_parallel(lambda sel: desktop.clipboard_restore(saved[sel], sel), [s for s in saved if saved[s]])
 
 
 def write_selections(texts):

@@ -286,6 +286,59 @@ def clipboard_get(selection: str = "clipboard") -> str | None:
     return r.stdout.decode(errors="replace") if r.returncode == 0 else None
 
 
+def clipboard_types(selection: str = "clipboard") -> list[str]:
+    """The formats the clipboard or primary selection offers; [] if it's empty."""
+    if USE_XCLIP:
+        cmd = ["xclip", "-selection", selection, "-o", "-t", "TARGETS"]
+    else:
+        cmd = ["wl-paste", "--list-types"] + (["--primary"] if selection == "primary" else [])
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=1)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return []
+    return r.stdout.decode(errors="replace").split() if r.returncode == 0 else []
+
+
+def clipboard_save(selection: str = "clipboard") -> tuple[str, bytes] | None:
+    """The selection's contents as (format, data), for clipboard_restore(): an image as an
+    image, else text as text, else its first format's data; None if empty or unreadable.
+    One format is kept, so rich text comes back as plain text."""
+    types = clipboard_types(selection)
+    kind = next((t for t in types if t.startswith("image/")), None)
+    if kind is None and any(t == "UTF8_STRING" or t.startswith("text/plain") for t in types):
+        text = clipboard_get(selection)
+        return ("text", text.encode()) if text is not None else None
+    kind = kind or next((t for t in types if "/" in t), None)  # a MIME type, not an X11 atom
+    if kind is None:
+        return None
+    if USE_XCLIP:
+        cmd = ["xclip", "-selection", selection, "-o", "-t", kind]
+    else:
+        cmd = ["wl-paste", "--type", kind] + (["--primary"] if selection == "primary" else [])
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=2)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    return (kind, r.stdout) if r.returncode == 0 and r.stdout else None
+
+
+def clipboard_restore(saved: tuple[str, bytes], selection: str = "clipboard") -> bool:
+    """Put back what clipboard_save() read."""
+    kind, data = saved
+    if kind == "text":
+        return clipboard_set(data.decode(), selection)
+    if USE_XCLIP:
+        cmd = ["xclip", "-selection", selection, "-t", kind]
+    else:
+        cmd = ["wl-copy", "--type", kind] + (["--primary"] if selection == "primary" else [])
+    try:
+        subprocess.run(cmd, input=data, check=True, timeout=2)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print(f"clipboard: {e}", flush=True)
+        return False
+
+
 def clipboard_set(text: str, selection: str = "clipboard") -> bool:
     if USE_XCLIP:
         cmd = ["xclip", "-selection", selection]

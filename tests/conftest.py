@@ -88,7 +88,7 @@ class FakeModel:
 def make_dictation(monkeypatch):
     d = daemon.Dictation(engine.ModelManager(FakeModel()), types.SimpleNamespace(InputStream=FakeStream), kbd=None, ec=None)
     d.pasted = []
-    d.paster.paste = lambda text, snapshot=None: d.pasted.append(text.strip()) or True
+    d.paster.paste = lambda text: d.pasted.append(text.strip()) or True
     d.refresh_hint = lambda: None
     monkeypatch.setattr(llm, "warm_rewrite_model", lambda: None)
     monkeypatch.setattr(llm, "llm_cleanup", lambda text, lang, on_gpu=None: f"CLEANED:{text}")

@@ -302,7 +302,7 @@ def test_retype_refuses_while_a_take_is_in_flight(monkeypatch):
 def test_history_records_whether_the_take_was_typed(monkeypatch):
     d = make_dictation(monkeypatch)
     monkeypatch.setattr(store, "add_history", real_add_history)
-    d.paster.paste = lambda text, snapshot=None: False  # e.g. the clipboard couldn't be set
+    d.paster.paste = lambda text: False  # e.g. the clipboard couldn't be set
     d.toggle()
     d.toggle()
     assert store.load_history()[-1]["typed"] is False
@@ -545,23 +545,64 @@ def test_transcribing_notice_does_not_hold_up_the_take(monkeypatch):
     assert shown.is_set() and closed == ["7"] and d.pasted == ["take1"]
 
 
-def test_paste_restores_the_clipboard_read_during_transcription(monkeypatch):
+def real_paster(monkeypatch, board):
+    """A dictation with the real paste, a fake keyboard and a fake clipboard: board maps each
+    selection to what desktop.clipboard_save() reads; returns (dictation, writes, restores)."""
     monkeypatch.setattr(daemon.time, "sleep", lambda s: None)
     d = make_dictation(monkeypatch)
     del d.paster.paste  # the real one
+    d.paster.RESTORE_AFTER = 0
     d.paster.ec = types.SimpleNamespace(EV_KEY=1, KEY_LEFTCTRL=29, KEY_V=47, KEY_LEFTSHIFT=42, KEY_INSERT=110)
     d.paster.kbd = FakeKeyboard()
-    board = {"clipboard": "old", "primary": "old primary"}
-    monkeypatch.setattr(desktop, "clipboard_get", lambda sel="clipboard": board[sel])
-    sets = []
-    monkeypatch.setattr(desktop, "clipboard_set", lambda text, sel="clipboard": sets.append((sel, text)) or True)
+    writes, restores = [], []
+    monkeypatch.setattr(desktop, "clipboard_save", lambda sel="clipboard": board[sel])
+    def write(text, sel="clipboard"):
+        writes.append((sel, text))
+        board[sel] = ("text", text.encode())
+        return True
+    monkeypatch.setattr(desktop, "clipboard_set", write)
+    def restore(saved, sel="clipboard"):
+        restores.append((sel, saved))
+        board[sel] = saved
+        return True
+    monkeypatch.setattr(desktop, "clipboard_restore", restore)
+    return d, writes, restores
+
+
+def settled(paster):
+    """Wait for the paste's clipboard restore, which runs in the background."""
+    assert paster.clipboard.acquire(timeout=5)
+    paster.clipboard.release()
+
+
+def test_paste_puts_back_the_clipboard_as_it_was_at_the_paste_image_included(monkeypatch):
+    board = {"clipboard": ("text", b"old"), "primary": ("text", b"old primary")}
+    d, writes, restores = real_paster(monkeypatch, board)
+    board["clipboard"] = ("image/png", b"\x89PNG...")  # copied while the take was transcribed
+    assert d.paster.paste("hi ")
+    settled(d.paster)
+    assert sorted(writes) == [("clipboard", "hi "), ("primary", "hi ")]
+    assert sorted(restores) == [("clipboard", ("image/png", b"\x89PNG...")), ("primary", ("text", b"old primary"))]
+
+
+def test_paste_that_can_t_set_the_clipboard_puts_yours_back(monkeypatch):
+    board = {"clipboard": ("text", b"old"), "primary": ("text", b"old primary")}
+    d, _, restores = real_paster(monkeypatch, board)
+    monkeypatch.setattr(desktop, "clipboard_set", lambda text, sel="clipboard": sel == "clipboard")  # primary fails
+    assert not d.paster.paste("hi ")
+    assert ("clipboard", ("text", b"old")) in restores and notified[-1] == pipeline.COPY_FAILED[0]
+    assert d.paster.kbd.keys == []  # nothing pasted
+
+
+def test_next_paste_waits_for_the_last_one_s_clipboard_restore(monkeypatch):
+    board = {"clipboard": ("text", b"yours"), "primary": None}
+    d, _, _ = real_paster(monkeypatch, board)
     store.save_settings({"paste_key": "ctrl+v"})
-    snapshot = d.paster.snapshot_clipboard()
-    store.save_settings({"paste_key": "shift+insert"})  # changed mid-take: primary is read at paste
-    assert d.paster.paste("hi ", snapshot)
-    assert sorted(sets) == sorted([("clipboard", "hi "), ("primary", "hi "),
-                                   ("clipboard", "old"), ("primary", "old primary")])
-    assert sets.index(("clipboard", "old")) > sets.index(("clipboard", "hi "))
+    d.paster.RESTORE_AFTER = 0.2
+    assert d.paster.paste("one ")
+    assert d.paster.paste("two ")  # right after: must not read "one " as yours
+    settled(d.paster)
+    assert board["clipboard"] == ("text", b"yours")
 
 
 def test_take_passes_the_warm_up_result_to_the_cleanup(monkeypatch):
@@ -591,7 +632,7 @@ def test_take_stopped_during_a_retype_pastes_after_it(monkeypatch):
     d.paster.kbd = FakeKeyboard()
     order = []
     typing = threading.Event()
-    def paste(text, snapshot=None):
+    def paste(text):
         if text == "Hello ":
             typing.set()
             time.sleep(0.2)

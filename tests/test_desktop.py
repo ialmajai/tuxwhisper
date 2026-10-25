@@ -81,6 +81,24 @@ def test_edit_text_drafts_are_private_unique_and_removed(monkeypatch, tmp_path):
         desktop.edit_text("a", "t", "OK")
 
 
+@pytest.mark.parametrize("offered, saved", [
+    (["TARGETS", "image/png", "text/html"], ("image/png", b"data of image/png")),  # a screenshot
+    (["TARGETS", "UTF8_STRING", "text/html"], ("text", b"the text")),    # rich text: as text
+    (["TARGETS", "x-special/gnome-copied-files"], ("x-special/gnome-copied-files",
+                                                   b"data of x-special/gnome-copied-files")),
+    ([], None),                                                                    # empty
+])
+def test_clipboard_save_keeps_images_and_other_formats_not_only_text(monkeypatch, offered, saved):
+    monkeypatch.setattr(desktop, "USE_XCLIP", True)
+    def run(cmd, **k):
+        kind = cmd[cmd.index("-t") + 1]
+        out = "\n".join(offered).encode() if kind == "TARGETS" else f"data of {kind}".encode()
+        return types.SimpleNamespace(returncode=0 if offered else 1, stdout=out)
+    monkeypatch.setattr(desktop.subprocess, "run", run)
+    monkeypatch.setattr(desktop, "clipboard_get", lambda sel="clipboard": "the text")
+    assert desktop.clipboard_save() == saved
+
+
 def test_clipboard_set_survives_missing_tool(monkeypatch):
     def missing(*a, **kw):
         raise FileNotFoundError("wl-copy")
