@@ -126,3 +126,19 @@ def test_context_size_allows_for_scripts_that_take_more_tokens_a_character():
     system = "x" * 1500
     assert llm.context_size(system, "word " * 600) == 4096   # 3000 letters of English
     assert llm.context_size(system, "字" * 3000) == 8192     # about a token a character
+
+
+@pytest.mark.parametrize("body, notice", [
+    (b'{"error":"model requires more system memory... cudaMalloc failed: out of memory"}',
+     "Not enough GPU memory for LLM cleanup; pasted the plain transcript"),
+    (b'{"error":"something else"}', "LLM cleanup failed; pasted the plain transcript"),
+])
+def test_cleanup_out_of_memory_says_so(monkeypatch, body, notice):
+    import io
+    import urllib.error
+    monkeypatch.setattr(llm, "rewrite_model_on_gpu", lambda: True)
+    def ollama(path, payload=None, timeout=30):
+        raise urllib.error.HTTPError(path, 500, "error", {}, io.BytesIO(body))
+    monkeypatch.setattr(llm, "ollama", ollama)
+    assert llm.llm_cleanup("hello there", "en") == "hello there"
+    assert notified == [notice]

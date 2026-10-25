@@ -192,6 +192,15 @@ def llm_cleanup(text: str, lang: str | None, on_gpu: bool | None = None, notify=
                            body="Split long dictations into shorter takes.", level="warn")
             return text
         cleaned = json.loads(r["message"]["content"])["cleaned"].strip()
+    except urllib.error.HTTPError as e:
+        # A long take's larger context makes Ollama reload the model, which may no longer fit.
+        if b"out of memory" in e.read():
+            log.info("rewrite skipped: out of GPU memory at the larger context")
+            notify("Not enough GPU memory for LLM cleanup; pasted the plain transcript", level="warn")
+        else:
+            log.info(f"rewrite failed: {e}")
+            notify("LLM cleanup failed; pasted the plain transcript", level="warn")
+        return text
     except Exception as e:  # noqa: BLE001 - any failure falls back to the plain transcript
         log.info(f"rewrite failed: {e}")
         notify("LLM cleanup failed; pasted the plain transcript", level="warn")
