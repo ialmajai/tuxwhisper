@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 from tuxwhisper import store
 
@@ -16,6 +17,16 @@ from tuxwhisper import store
 # and a warning or error should stay long enough to read even when looking away.
 NOTIFY_TIMEOUTS = {"info": 1500, "info+body": 6000, "warn": 8000, "error": 8000}
 NOTIFY_ICONS = {"warn": "dialog-warning", "error": "dialog-error"}
+# GNOME Shell (49) breaks if a notification is replaced or closed while its banner slides in:
+# it then shows no banners from any app until the next login. So a persistent notification is
+# left alone for this long (seconds) after it was shown or changed.
+BANNER_SETTLE = 0.5
+_shown: dict[str, float] = {}  # persistent notification ID -> when it was last shown or changed
+
+
+def _unsettled(nid: str | None) -> float:
+    """Seconds until notification nid may be changed or closed."""
+    return max(0.0, _shown.get(nid, 0.0) + BANNER_SETTLE - time.monotonic()) if nid else 0.0
 
 
 def spawn(cmd: list[str]) -> None:
@@ -37,11 +48,14 @@ def notify(msg: str, persistent: bool = False, body: str | None = None, level: s
         print(msg, flush=True)
         return None
     if persistent:
+        time.sleep(_unsettled(replace))
         try:
             r = subprocess.run(["notify-send", *opts, "-u", "normal", "-t", "0", "-p",
                                 *(["-r", replace] if replace else []), msg, *extra],
                                capture_output=True, text=True, timeout=2)
             nid = r.stdout.strip() or None
+            if nid:
+                _shown[nid] = time.monotonic()
             track_notification(nid, open_=True)
             return nid
         except subprocess.TimeoutExpired:
@@ -228,11 +242,19 @@ def close_stale_notifications() -> None:
 
 
 def close_notification(nid: str | None) -> None:
+    """Close a persistent notification; one shown under BANNER_SETTLE ago closes once it has
+    settled, without holding up the caller."""
     track_notification(nid, open_=False)
     if nid and shutil.which("gdbus"):
-        spawn(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+        wait = _unsettled(nid)
+        _shown.pop(nid, None)
+        cmd = ["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
                "--object-path", "/org/freedesktop/Notifications",
-               "--method", "org.freedesktop.Notifications.CloseNotification", nid])
+               "--method", "org.freedesktop.Notifications.CloseNotification", nid]
+        if wait:
+            threading.Timer(wait, spawn, [cmd]).start()
+        else:
+            spawn(cmd)
 
 
 # xclip works on X11 and on Wayland desktops with XWayland (GNOME, KDE, most others);

@@ -11,6 +11,7 @@ real_add_history = store.add_history  # the fixture below stubs it out for the d
 
 
 real_notify = desktop.notify
+real_close_notification = desktop.close_notification
 
 
 @pytest.fixture(autouse=True)

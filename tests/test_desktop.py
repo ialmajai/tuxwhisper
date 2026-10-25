@@ -5,7 +5,7 @@ import time
 import types
 
 import pytest
-from conftest import real_notify
+from conftest import real_close_notification, real_notify
 
 from tuxwhisper import desktop
 
@@ -145,6 +145,32 @@ def test_persistent_notify_stays_and_can_replace(monkeypatch, tmp_path):
     cmd = cmds[0]
     assert cmd[cmd.index("-t") + 1] == "0" and cmd[cmd.index("-u") + 1] == "normal"
     assert cmd[cmd.index("-r") + 1] == "5" and cmd[cmd.index("-i") + 1] == "mic"
+
+
+def test_notification_is_not_changed_while_its_banner_slides_in(monkeypatch):
+    shown_at = []
+    monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **k: shown_at.append(time.monotonic()) or
+                        types.SimpleNamespace(stdout="11\n"))
+    real_notify("Recording…", persistent=True)
+    real_notify("Transcribing…", persistent=True, replace="11")
+    assert shown_at[1] - shown_at[0] >= desktop.BANNER_SETTLE - 0.05
+
+
+def test_notification_closed_while_its_banner_slides_in_closes_once_settled(monkeypatch):
+    closed_at = []
+    monkeypatch.setattr(desktop.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(desktop, "spawn", lambda cmd: closed_at.append((cmd[-1], time.monotonic())))
+    monkeypatch.setitem(desktop._shown, "12", time.monotonic())
+    start = time.monotonic()
+    real_close_notification("12")
+    assert closed_at == [] and time.monotonic() - start < 0.1  # the caller isn't held up
+    deadline = start + 5
+    while not closed_at and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert closed_at[0][0] == "12" and closed_at[0][1] - start >= desktop.BANNER_SETTLE - 0.05
+    real_close_notification("13")  # long settled (or never tracked): closes at once
+    assert closed_at[-1][0] == "13"
 
 
 def test_plural():
