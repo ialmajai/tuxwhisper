@@ -13,5 +13,5 @@ running as you does, including ones started over SSH while you're logged in.
 
 If you don't want this, answer no when the installer asks, or skip step 2 by hand: TuxWhisper
 then copies each transcript instead of typing it, and you paste it yourself with Ctrl+V.
-To undo it later, run `./uninstall.sh`, or `sudo rm /etc/udev/rules.d/60-uinput.rules`, and
+To undo it later, run `./uninstall.sh`, or `sudo rm /etc/udev/rules.d/60-tuxwhisper-uinput.rules`, and
 reboot.

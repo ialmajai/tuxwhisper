@@ -16,7 +16,10 @@ CMD="${TUXWHISPER_CMD:-$DIR/asr}"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
-RULE=/etc/udev/rules.d/60-uinput.rules
+# Its own file: 60-uinput.rules may hold other tools' rules (ydotool, Steam), so it's not ours
+# to overwrite or delete. Installs before 0.2.18 put the line there, which still counts.
+RULE=/etc/udev/rules.d/60-tuxwhisper-uinput.rules
+OLD_RULE=/etc/udev/rules.d/60-uinput.rules
 RULE_TEXT='KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"'
 YES=0 PACKAGES_ONLY=0 engine=
 for arg in "$@"; do
@@ -125,7 +128,8 @@ else
 fi
 
 step "3/6  Virtual keyboard (lets TuxWhisper type for you)"
-if [ -f "$RULE" ] && grep -qF "$RULE_TEXT" "$RULE"; then
+if { [ -f "$RULE" ] && grep -qF "$RULE_TEXT" "$RULE"; } ||
+   { [ -f "$OLD_RULE" ] && grep -qF "$RULE_TEXT" "$OLD_RULE"; }; then
     note "Already set up."
 else
     note "This writes one line to $RULE:"

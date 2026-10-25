@@ -6,7 +6,9 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
-RULE=/etc/udev/rules.d/60-uinput.rules
+RULE=/etc/udev/rules.d/60-tuxwhisper-uinput.rules
+OLD_RULE=/etc/udev/rules.d/60-uinput.rules  # where installs before 0.2.18 put the line
+RULE_TEXT='KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"'
 CMD="${TUXWHISPER_CMD:-$DIR/asr}"   # set by `tuxwhisper uninstall`
 PY="${TUXWHISPER_PY:-$DIR/.venv/bin/python}"
 
@@ -47,9 +49,20 @@ fi
 rm -f "$APPS_DIR/tuxwhisper-settings.desktop" "$ICON_DIR/tuxwhisper.png"
 note "Removed the app-grid launcher."
 
-if [ -f "$RULE" ] && ask "Remove the virtual keyboard rule ($RULE)? Other tools such as ydotool may use it."; then
+if [ -f "$RULE" ] && ask "Remove the virtual keyboard rule ($RULE)?"; then
     sudo rm "$RULE"
     note "Removed. It takes effect after a reboot."
+fi
+if [ -f "$OLD_RULE" ] && grep -qxF "$RULE_TEXT" "$OLD_RULE"; then
+    if [ "$(grep -cv '^[[:space:]]*$' "$OLD_RULE")" = 1 ]; then  # only our line: ours to remove
+        if ask "Remove the virtual keyboard rule ($OLD_RULE)? Other tools such as ydotool may use it."; then
+            sudo rm "$OLD_RULE"
+            note "Removed. It takes effect after a reboot."
+        fi
+    else
+        note "$OLD_RULE also holds other rules, so it stays. To remove only TuxWhisper's line:"
+        note "  sudo sed -i '/TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"/d' $OLD_RULE"
+    fi
 fi
 
 echo

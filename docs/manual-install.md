@@ -87,7 +87,7 @@ paste with Ctrl+V instead. To undo it, delete the file and reboot.
 
 ```bash
 echo 'KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"' |
-  sudo tee /etc/udev/rules.d/60-uinput.rules
+  sudo tee /etc/udev/rules.d/60-tuxwhisper-uinput.rules
 sudo udevadm control --reload && sudo udevadm trigger --name-match=uinput
 getfacl /dev/uinput    # should list user:<your name>:rw-
 ```
@@ -150,7 +150,7 @@ systemctl --user disable --now tuxwhisper
 rm -rf ~/.config/systemd/user/tuxwhisper.service ~/.config/systemd/user/tuxwhisper.service.d
 rm -f ~/.local/share/applications/tuxwhisper-settings.desktop
 systemctl --user daemon-reload
-sudo rm /etc/udev/rules.d/60-uinput.rules    # takes effect after a reboot
+sudo rm /etc/udev/rules.d/60-tuxwhisper-uinput.rules    # takes effect after a reboot
 ```
 
 Then remove the keyboard shortcuts and delete the repo folder. These stay until you delete
