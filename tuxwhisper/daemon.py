@@ -204,11 +204,14 @@ class Dictation:
         """The mic's callback: keep each block of a take, and count lost audio, which would
         otherwise only show as a worse transcript. Between takes, with the mic kept open, each
         block is dropped as it arrives: nothing is recorded."""
+        # The list first: _stop clears self.stream and then swaps the list, so a block caught
+        # between the two goes to the take that stopped, not the next one.
+        chunks = self.chunks
         if self.stream is None:
             return
         if status and status.input_overflow:
             self.dropped += 1
-        self.chunks.append(data.copy())
+        chunks.append(data.copy())
         self.live.set()
 
     def _announce(self, token, rewrite):

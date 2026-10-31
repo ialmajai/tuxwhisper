@@ -114,14 +114,19 @@ class TakePipeline:
             text = self.clean_up(text, lang, take.warming, status)
         t_cleanup = time.time() - t1
         text = store.apply_replacements(text)
-        end_status(status)
         t2 = time.time()
         typed = self.paster.paste(text + " ")
+        # Closed after the paste: closing waits for "Transcribing…" to have been shown, and a
+        # slow notification daemon must not hold up the text.
+        end_status(status)
         parts = f" ({take.long.passes} passes while speaking, {take.long.tail:.1f}s tail)" if streamed else ""
         log.info(f"  timing: transcribe {t_asr:.2f}s{parts}, cleanup {t_cleanup:.2f}s, paste {time.time() - t2:.2f}s;"
                  f" {time.monotonic() - take.stopped_at:.2f}s from stop to pasted")
-        # Only a typed take can be retyped; a replaced one's text no longer matches its recording.
-        kept.entry = store.add_history(text, rewritten=take.rewrite, typed=typed, replaced=text != kept.text)
+        try:
+            # Only a typed take can be retyped; a replaced one's text no longer matches its recording.
+            kept.entry = store.add_history(text, rewritten=take.rewrite, typed=typed, replaced=text != kept.text)
+        except OSError:  # the take was pasted: not a failed dictation
+            log.exception("  couldn't add the take to the history")
         self.warn_if_clipped(audio)
         self.after_paste()
 

@@ -40,8 +40,27 @@ def test_chosen_model_is_loaded_once_it_fits_after_none_did_at_startup(monkeypat
     assert models.model is None and not models.ensure_loaded()
     free[0] = 3.0  # another program freed the GPU
     monkeypatch.setattr(engine, "free_gpu_gb", lambda: None)  # e.g. Vulkan: no memory figure
+    models.no_room_until = 0.0  # the backoff after the failed loads has passed
     assert models.ensure_loaded()
     assert loads == [engine.asr_model()] and models.name == "large-v3-turbo" and not models.fallback_from
+
+
+def test_no_room_is_not_retried_on_every_take(monkeypatch):
+    """A round of failing loads costs seconds; takes soon after one skip it (the idle watcher
+    checks for room meanwhile), and the user is still told."""
+    fake_gpu(monkeypatch, [0.05], [])
+    attempts = []
+    load = engine.load_whisper
+    monkeypatch.setattr(engine, "load_whisper", lambda name: attempts.append(name) or load(name))
+    models = engine.ModelManager(*engine.load_model())
+    attempts.clear()
+    assert not models.ensure_loaded()
+    tried = len(attempts)
+    assert tried > 1  # the whole ladder, once
+    models.last_memory_notice = 0.0  # the next take is more than 10 s later
+    notified.clear()
+    assert not models.ensure_loaded()
+    assert len(attempts) == tried and notified == ["Not enough GPU memory to dictate"]
 
 
 def test_startup_out_of_memory_falls_back(monkeypatch):
@@ -219,3 +238,11 @@ def test_failed_download_at_startup_isn_t_called_a_gpu_problem(monkeypatch, erro
     with pytest.raises(engine.ModelUnavailable):
         engine.load_model()
     assert notified[-1] == notice
+
+
+def test_cublas_allocation_failure_counts_as_out_of_memory():
+    """On a nearly full GPU the weights load, then the warm-up's cuBLAS workspace doesn't:
+    that must step down or wait like any out-of-memory, not exit the daemon."""
+    assert engine.out_of_memory(RuntimeError("cuBLAS failed with status CUBLAS_STATUS_ALLOC_FAILED"))
+    assert engine.out_of_memory(RuntimeError("CUDA failed with error out of memory"))
+    assert not engine.out_of_memory(RuntimeError("CUDA driver version is insufficient"))

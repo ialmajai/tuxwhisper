@@ -300,7 +300,9 @@ GPU_MARGIN_GB = 0.4  # room for the model's working memory on top of its weights
 
 
 def out_of_memory(e: BaseException) -> bool:
-    return "out of memory" in str(e).lower()
+    """Whether e is the GPU running out of memory: CUDA says so; cuBLAS and cuDNN, when their
+    working memory doesn't fit on a nearly full GPU, report an allocation failure instead."""
+    return "out of memory" in str(e).lower() or "alloc_failed" in str(e).lower()
 
 
 def short_name(name: str) -> str:
@@ -433,6 +435,9 @@ def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
 
 
 RETRY_MAX_SECONDS = 30  # whispered takes longer than this aren't retried without the voice filter
+# Seconds after no model fitted in GPU memory before a take tries loading one again: each try
+# of the ladder costs seconds of failing CUDA allocations, and the user has been told.
+NO_ROOM_BACKOFF = 30
 
 
 class ModelManager:
@@ -448,6 +453,7 @@ class ModelManager:
         self.name = name or short_name(asr_model())
         self.lock = threading.Lock()  # held while the speech model is used, loaded or freed
         self.last_memory_notice = 0.0
+        self.no_room_until = 0.0  # no loads tried before this, after none fitted (NO_ROOM_BACKOFF)
         self.last_lang = "en"  # the last take's language: the guess for the next one's prompt
         self.last_used = time.monotonic()  # when a take last started or was transcribed
 
@@ -460,6 +466,9 @@ class ModelManager:
         Without enough GPU memory, use the largest smaller model that fits; False if none does."""
         with self.lock:
             if self.model is None:  # none fitted at startup: the chosen one may fit by now
+                if time.monotonic() < self.no_room_until:  # a round of loads just failed
+                    self._say_no_room()
+                    return False
                 try:
                     self.model = load_whisper(asr_model())
                 except RuntimeError as e:
@@ -488,14 +497,19 @@ class ModelManager:
         tried = [current or preferred]
         found = load_smaller(tried[0], tried)
         if not found:
-            if time.monotonic() - self.last_memory_notice > 10:  # once per take, not per thread
-                self.last_memory_notice = time.monotonic()
-                no_memory_notice(tried)
+            self.no_room_until = time.monotonic() + NO_ROOM_BACKOFF
+            self._say_no_room(tried)
             return False
         self.model, self.name = found
         self.fallback_from = preferred
         fallback_notice(self.name, preferred)
         return True
+
+    def _say_no_room(self, tried: list[str] | None = None) -> None:
+        """Tell the user no model fits, at most once per 10 s: once per take, not per thread."""
+        if time.monotonic() - self.last_memory_notice > 10:
+            self.last_memory_notice = time.monotonic()
+            no_memory_notice(tried)
 
     def restore_if_room(self) -> None:
         """Go back to the chosen model once the GPU has room for it again; not while the model

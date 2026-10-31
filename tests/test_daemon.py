@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from conftest import (
     FakeKeyboard,
+    FakeModel,
     FakeStream,
     InlineThread,
     OOMModel,
@@ -240,6 +241,7 @@ def test_take_loads_a_model_once_there_is_room(monkeypatch):
     d.toggle()
     assert d.pasted == [] and loads == []
     free[0] = 1.2
+    d.models.no_room_until = 0.0  # the backoff after the failed loads has passed
     d.toggle()
     d.toggle()
     assert loads == ["small"] and d.pasted == ["take1"]
@@ -900,3 +902,55 @@ def test_late_recording_notice_of_an_old_take_does_not_take_over_the_next(monkey
     d.live.set()
     d._announce(old_token, False)  # the first take's notice, shown late
     assert d.indicator is None and closed == ["old"]
+
+
+class StopsOnStreamRead(daemon.Dictation):
+    """A Dictation where the mic's callback is preempted as it reads self.stream, and _stop
+    runs there (clears the stream, swaps the chunk list) before the callback goes on."""
+    swap = False
+
+    @property
+    def stream(self):
+        stream = self.__dict__["stream"]
+        if self.swap:
+            self.swap = False
+            self.__dict__["stream"] = None
+            self.chunks = []
+        return stream
+
+    @stream.setter
+    def stream(self, value):
+        self.__dict__["stream"] = value
+
+
+def test_block_arriving_as_the_take_stops_goes_to_that_take(monkeypatch):
+    d = StopsOnStreamRead(engine.ModelManager(FakeModel()), types.SimpleNamespace(InputStream=FakeStream),
+                          kbd=None, ec=None)
+    d.refresh_hint = lambda: None
+    d.toggle()  # recording: one block so far
+    old = d.chunks
+    d.swap = True
+    d._capture(np.zeros((160, 1), dtype=np.float32))
+    assert len(old) == 2 and d.chunks == []  # the block joined the take that stopped, not the next
+
+
+def test_text_is_pasted_before_the_transcribing_notice_is_closed(monkeypatch):
+    d = make_dictation(monkeypatch)
+    order = []
+    monkeypatch.setattr(desktop, "notify", lambda msg, **kw: "7" if kw.get("persistent") else None)
+    monkeypatch.setattr(desktop, "close_notification", lambda nid: order.append("closed"))
+    d.paster.paste = lambda text: order.append("pasted") or True
+    d.toggle()
+    d.toggle()
+    assert order == ["pasted", "closed"]
+
+
+def test_history_write_failure_is_not_a_failed_dictation(monkeypatch):
+    d = make_dictation(monkeypatch)
+    def full(text, **kw):
+        raise OSError("No space left on device")
+    monkeypatch.setattr(store, "add_history", full)
+    d.toggle()
+    d.toggle()
+    assert d.pasted == ["take1"]
+    assert not any("failed" in m.lower() for m in notified)
