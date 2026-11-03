@@ -305,7 +305,7 @@ def test_yad_menu_shows_the_logo_and_parts_the_groups_with_lines(monkeypatch):
             ("keys", "Keys & more", "F5", "The keys")]
     assert menu.menu_choice(rows) == "keys"
     cmd = cmds[0]
-    assert f"--image={menu.logo_path()}" in cmd and os.path.exists(menu.logo_path()) and "--sep-column=1" in cmd and f"--sep-value={menu.SEPARATOR}" in cmd
+    assert f"--image={desktop.LOGO}" in cmd and os.path.exists(desktop.LOGO) and "--sep-column=1" in cmd and f"--sep-value={menu.SEPARATOR}" in cmd
     assert cmd[cmd.index("--") + 1:] == [
         "<b>Recent transcripts</b>", '3 <span alpha="55%">(default)</span>', "Your last", menu.SEPARATOR, "", "",
         "<b>Language</b>", "English", "Spoken", menu.SEPARATOR, "", "", "<b>Keys &amp; more</b>", "F5", "The keys"]

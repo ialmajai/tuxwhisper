@@ -140,11 +140,6 @@ def pick_asr_model(current):
            f"dictating with {current}; TuxWhisper switches to {name} when the download is done.")
 
 
-def logo_path() -> str:
-    """The tiny logo shipped in the package: yad shows an image file at its own size."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
-
-
 GROUP_STARTS = ("language", "mode", "keys")  # the rows a new group of settings starts at
 SEPARATOR = "—"  # a yad row whose Setting column is this is drawn as a line between groups
 
@@ -154,8 +149,7 @@ def menu_choice(rows):
     None, with each row's help in a column of its own."""
     text = "--text=Pick a row to change it. Most changes apply to your next dictation."
     if desktop.have_yad():
-        # The logo by the heading (by path: yad doesn't find it by its icon name), and the
-        # groups of rows parted by lines. No hidden key column here, so rows are told apart by their names.
+        # The logo by the heading, and the groups of rows parted by lines. No hidden key column here, so rows are told apart by their names.
         # Cells are Pango markup: setting names in bold, "(default)" dimmed.
         by_name = {f"<b>{html.escape(name)}</b>": key for key, name, _, _ in rows}
         shown = []
@@ -164,10 +158,10 @@ def menu_choice(rows):
                 shown.append((SEPARATOR, "", ""))
             value = html.escape(value).replace(" (default)", ' <span alpha="55%">(default)</span>')
             shown.append((f"<b>{html.escape(name)}</b>", value, html.escape(help_)))
-        r = subprocess.run(["yad", *desktop.YAD_APP, f"--window-icon={logo_path()}", "--list",
+        r = subprocess.run(["yad", *desktop.YAD_APP, "--list",
                             "--title=TuxWhisper Settings",
                             *desktop.fit(("Setting", "Value", "What it does"), [r[1:] for r in rows]),
-                            "--center", f"--image={logo_path()}", "--borders=10", text,
+                            "--center", f"--image={desktop.LOGO}", "--borders=10", text,
                             "--column=Setting", "--column=Value", "--column=What it does",
                             "--print-column=1", "--sep-column=1", f"--sep-value={SEPARATOR}",
                             "--no-click", "--expand-column=3",  # headers don't re-sort the groups

@@ -381,8 +381,12 @@ def have_yad() -> bool:
     return shutil.which("yad") is not None
 
 
-# The app name GNOME matches to the launcher, so dialogs show its icon instead of yad's.
-YAD_APP = ["--name=tuxwhisper-settings", "--window-icon=tuxwhisper"]
+DATA = os.path.dirname(os.path.abspath(__file__))
+LOGO = os.path.join(DATA, "logo.png")  # tiny: yad shows an image file at its own size
+# The app name GNOME matches to the launcher, so dialogs show its icon instead of yad's; the
+# logo by path, as yad doesn't find it by its icon name; and the styles (rows light up under
+# the pointer).
+YAD_APP = ["--name=tuxwhisper-settings", f"--window-icon={LOGO}", f"--gtkrc={os.path.join(DATA, 'menu.css')}"]
 YAD_ICONS = {"--info": "dialog-information", "--error": "dialog-error", "--question": "dialog-question"}
 
 

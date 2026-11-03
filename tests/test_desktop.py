@@ -264,3 +264,12 @@ def test_no_pactl_means_nothing_to_mute(monkeypatch):
     monkeypatch.setattr(desktop.subprocess, "run", missing)
     assert desktop.playing_streams() == []
     desktop.mute_streams(["1"], True)  # no error either
+
+
+def test_yad_dialogs_get_the_logo_and_the_styles():
+    """Every yad dialog: the window icon by path (yad doesn't find it by name) and the CSS."""
+    icon = next(a for a in desktop.YAD_APP if a.startswith("--window-icon=")).split("=", 1)[1]
+    css = next(a for a in desktop.YAD_APP if a.startswith("--gtkrc=")).split("=", 1)[1]
+    assert os.path.exists(icon) and os.path.exists(css)
+    with open(css) as f:
+        assert "hover" in f.read()

@@ -1,0 +1,2 @@
+/* Styles for TuxWhisper's yad dialogs (--gtkrc): list rows light up under the pointer. */
+treeview.view:hover { background-color: alpha(@theme_selected_bg_color, 0.3); }
