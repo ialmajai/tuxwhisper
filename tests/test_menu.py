@@ -1,6 +1,7 @@
 """Tests for the settings menu and correcting the last transcript."""
 import json
 import os
+import types
 
 import pytest
 from conftest import notified, real_add_history
@@ -261,3 +262,50 @@ def test_a_typed_mic_open_time_is_shown_ticked_next_time(monkeypatch):
     monkeypatch.setattr(desktop, "pick", lambda title, options, current: shown.update(o=options, c=current))
     menu.edit_mic_open(store.settings())
     assert shown["c"] == "open for 45 min after a take" and shown["c"] in shown["o"]
+
+
+@pytest.mark.parametrize("model, language, answer, saved", [
+    ("distil-large-v3.5", "fr", None, None),   # English-only model, French: asked, said No
+    ("distil-large-v3.5", "fr", "", "fr"),     # asked, said Yes
+    ("distil-large-v3.5", "en", None, "en"),   # English: not asked
+    ("distil-large-v3.5", "", None, ""),       # auto-detect: not asked
+    ("large-v3-turbo", "fr", None, "fr"),      # a multilingual model: not asked
+])
+def test_setting_a_language_an_english_only_model_can_t_hear_asks_first(monkeypatch, model, language, answer, saved):
+    store.save_settings({"asr_model": model})
+    asked = []
+    monkeypatch.setattr(desktop, "zenity", lambda *args: asked.append(args) or answer)
+    names = {"": "auto-detect", "en": "English (en)", "fr": "French (fr)"}
+    monkeypatch.setattr(desktop, "pick", lambda title, options, current: names[language])
+    assert menu.edit_language(store.settings()) == (None if saved is None else {"language": saved})
+    assert bool(asked) is (model.startswith("distil") and language == "fr")
+    assert all("--question" in a for a in asked)
+
+
+def test_picking_an_english_only_model_with_another_language_set_asks_first(monkeypatch):
+    store.save_settings({"language": "fr"})
+    monkeypatch.setattr(menu.engine, "model_downloaded", lambda name: True)
+    dialogs = []
+    def zenity(*args):
+        dialogs.append(args)
+        return "distil-large-v3.5 (1.5 GB, downloaded): English only: fast and accurate" if "--list" in args else None
+    monkeypatch.setattr(desktop, "zenity", zenity)
+    monkeypatch.setattr(menu, "switch_asr_model", lambda name: switched.append(name) or False)
+    switched = []
+    menu.pick_asr_model("large-v3-turbo")
+    assert [a[0] for a in dialogs] == ["--list", "--question"] and switched == []  # said No: not switched
+
+
+def test_yad_menu_shows_the_logo_and_parts_the_groups_with_lines(monkeypatch):
+    cmds = []
+    monkeypatch.setattr(desktop, "have_yad", lambda: True)
+    monkeypatch.setattr(menu.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or types.SimpleNamespace(
+        returncode=0, stdout="<b>Keys &amp; more</b>|F5|The keys\n"))
+    rows = [("history", "Recent transcripts", "3 (default)", "Your last"), ("language", "Language", "English", "Spoken"),
+            ("keys", "Keys & more", "F5", "The keys")]
+    assert menu.menu_choice(rows) == "keys"
+    cmd = cmds[0]
+    assert f"--image={menu.logo_path()}" in cmd and os.path.exists(menu.logo_path()) and "--sep-column=1" in cmd and f"--sep-value={menu.SEPARATOR}" in cmd
+    assert cmd[cmd.index("--") + 1:] == [
+        "<b>Recent transcripts</b>", '3 <span alpha="55%">(default)</span>', "Your last", menu.SEPARATOR, "", "",
+        "<b>Language</b>", "English", "Spoken", menu.SEPARATOR, "", "", "<b>Keys &amp; more</b>", "F5", "The keys"]

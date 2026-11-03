@@ -9,7 +9,8 @@ bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without edi
 - Other sounds while recording: mute what other apps are playing (music, radio, a video) while
   a take records, and put it back after. Off by default, as it would also mute a call you're
   dictating into. Needs PipeWire or PulseAudio (`pactl`).
-- Language
+- Language. The distil model understands English only, so setting another language with it,
+  or picking it with another language set, asks first.
 - Paste key
 - Keys: the key for each action. Pick from a list or type any combination, such as
   `Ctrl+Alt+D`; it takes effect at once. On GNOME only; other desktops set keys in their own

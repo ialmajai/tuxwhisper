@@ -1,6 +1,7 @@
 """The settings menu, the speech model picker and correcting the last transcript."""
 import dataclasses
 import difflib
+import html
 import json
 import os
 import re
@@ -123,6 +124,8 @@ def pick_asr_model(current):
     if not picked or labels[picked] in (current, pending):
         return
     name = labels[picked]
+    if not confirm_english_only(name, store.settings().language, "Speech model"):
+        return
     if engine.model_downloaded(name):
         store.set_pending_model(None)  # a download in progress finishes, but won't switch away from this
         restarted = switch_asr_model(name)
@@ -137,19 +140,39 @@ def pick_asr_model(current):
            f"dictating with {current}; TuxWhisper switches to {name} when the download is done.")
 
 
+def logo_path() -> str:
+    """The tiny logo shipped in the package: yad shows an image file at its own size."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+
+
+GROUP_STARTS = ("language", "mode", "keys")  # the rows a new group of settings starts at
+SEPARATOR = "—"  # a yad row whose Setting column is this is drawn as a line between groups
+
+
 def menu_choice(rows):
     """Show the settings list (rows: (key, setting, value, help)) and return the picked key or
     None, with each row's help in a column of its own."""
     text = "--text=Pick a row to change it. Most changes apply to your next dictation."
     if desktop.have_yad():
-        # No hidden key column here, so rows are told apart by their visible names.
-        by_name = {name: key for key, name, _, _ in rows}
-        r = subprocess.run(["yad", *desktop.YAD_APP, "--list", "--title=TuxWhisper Settings",
-                            *desktop.fit(("Setting", "Value", "What it does"), [row[1:] for row in rows]),
-                            "--center", text, "--column=Setting", "--column=Value", "--column=What it does",
-                            "--print-column=1",
+        # The logo by the heading (by path: yad doesn't find it by its icon name), and the
+        # groups of rows parted by lines. No hidden key column here, so rows are told apart by their names.
+        # Cells are Pango markup: setting names in bold, "(default)" dimmed.
+        by_name = {f"<b>{html.escape(name)}</b>": key for key, name, _, _ in rows}
+        shown = []
+        for key, name, value, help_ in rows:
+            if key in GROUP_STARTS:
+                shown.append((SEPARATOR, "", ""))
+            value = html.escape(value).replace(" (default)", ' <span alpha="55%">(default)</span>')
+            shown.append((f"<b>{html.escape(name)}</b>", value, html.escape(help_)))
+        r = subprocess.run(["yad", *desktop.YAD_APP, f"--window-icon={logo_path()}", "--list",
+                            "--title=TuxWhisper Settings",
+                            *desktop.fit(("Setting", "Value", "What it does"), [r[1:] for r in rows]),
+                            "--center", f"--image={logo_path()}", "--borders=10", text,
+                            "--column=Setting", "--column=Value", "--column=What it does",
+                            "--print-column=1", "--sep-column=1", f"--sep-value={SEPARATOR}",
+                            "--no-click", "--expand-column=3",  # headers don't re-sort the groups
                             "--button=Close:1", "--button=Select:0", "--",
-                            *[x for row in rows for x in row[1:]]],
+                            *[x for row in shown for x in row]],
                            capture_output=True, text=True)
         name = r.stdout.strip().split("|")[0]
         return by_name.get(name) if r.returncode == 0 else None
@@ -193,11 +216,29 @@ class Setting:
     after: Callable[[], None] | None = None
 
 
+def english_only(model: str) -> bool:
+    """Whether a speech model understands English only (the distil ones)."""
+    return engine.short_name(model).startswith("distil")
+
+
+def confirm_english_only(model: str, language: str, title: str) -> bool:
+    """Whether to go on with model and language together when the model is English-only and
+    the language is another: asks, as the speech would come out wrong. True otherwise."""
+    if not english_only(model) or language in ("", "en"):
+        return True
+    name = store.LANGUAGES.get(language, language)
+    return desktop.zenity("--question", f"--title={title}",
+                          f"--text={engine.short_name(model)} understands English only, so {name} speech "
+                          f"would come out wrong.\n\nUse them together anyway?") is not None
+
+
 def edit_language(s):
     names = {"auto-detect": "", **{f"{n} ({c})": c for c, n in store.LANGUAGES.items()}}
     current = next((n for n, c in names.items() if c == s.language), "auto-detect")
     picked = desktop.pick("Language", list(names), current)
-    return {"language": names[picked]} if picked else None
+    if not picked or not confirm_english_only(s.asr_model or engine.default_asr_model(), names[picked], "Language"):
+        return None
+    return {"language": names[picked]}
 
 
 def edit_paste_key(s):
