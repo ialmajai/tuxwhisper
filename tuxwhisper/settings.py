@@ -31,6 +31,9 @@ class Settings:
     # of after the 0.1-0.5 s it takes to open; 0 releases it after every take. Audio between
     # takes is dropped as it arrives, but the desktop's mic indicator stays on.
     mic_open_minutes: int = 0
+    # Mute what other apps are playing (music, radio, a video) while a take records, and put
+    # it back after. Off by default: it would also mute a call you're dictating into.
+    mute_others: bool = False
 
     @classmethod
     def from_config(cls, raw: Mapping[str, Any], env: Mapping[str, str] = os.environ) -> "Settings":
@@ -40,7 +43,8 @@ class Settings:
              "language": env.get("ASR_LANGUAGE") or "", "paste_key": env.get("ASR_PASTE_KEY", "shift+insert"),
              "rewrite_model": env.get("ASR_REWRITE_MODEL", "llama3.2"), "mode": "Clean up",
              "asr_model": env.get("ASR_MODEL", ""), "asr_unload_minutes": 30, "llm_unload_minutes": 30,
-             "mode_models": {}, "stream_long_takes": env.get("ASR_STREAM", "1") != "0", "mic_open_minutes": 0}
+             "mode_models": {}, "stream_long_takes": env.get("ASR_STREAM", "1") != "0", "mic_open_minutes": 0,
+             "mute_others": False}
         s.update({k: v for k, v in raw.items() if k in s and cls._fits(k, v)})
         try:
             s["sound_volume"] = min(max(int(s["sound_volume"]), 0), 100)

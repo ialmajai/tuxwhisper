@@ -224,3 +224,43 @@ def test_runs_command_matches_only_our_program(command, ours):
 def test_settings_shortcut_label_matches_the_keys_menu(monkeypatch):
     monkeypatch.setattr(desktop, "gnome_shortcuts", lambda: {"/p/": ("<Control><Alt>d", "/x/asr settings")})
     assert desktop.settings_shortcut() == "Ctrl+Alt+D"
+
+
+PACTL_SINK_INPUTS = """Sink Input #42
+\tDriver: PipeWire
+\tMute: no
+\tProperties:
+\t\tmedia.name = "Echo-Cancel Playback"
+Sink Input #7313
+\tDriver: PipeWire
+\tMute: no
+\tProperties:
+\t\tapplication.name = "gnome-radio"
+\t\tapplication.process.id = "4321"
+Sink Input #7400
+\tDriver: PipeWire
+\tMute: yes
+\tProperties:
+\t\tapplication.name = "Firefox"
+\t\tapplication.process.id = "5000"
+"""
+
+
+def test_playing_streams_are_apps_own_unmuted_ones(monkeypatch):
+    """Not the desktop's echo-cancel stream (it carries every sound, the beeps included), and
+    not one already muted, which must not be unmuted after."""
+    cmds = []
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or types.SimpleNamespace(
+        stdout=PACTL_SINK_INPUTS, returncode=0))
+    assert desktop.playing_streams() == ["7313"]
+    desktop.mute_streams(["7313"], True)
+    desktop.mute_streams(["7313"], False)
+    assert cmds[1:] == [["pactl", "set-sink-input-mute", "7313", "1"], ["pactl", "set-sink-input-mute", "7313", "0"]]
+
+
+def test_no_pactl_means_nothing_to_mute(monkeypatch):
+    def missing(cmd, **k):
+        raise FileNotFoundError(cmd[0])
+    monkeypatch.setattr(desktop.subprocess, "run", missing)
+    assert desktop.playing_streams() == []
+    desktop.mute_streams(["1"], True)  # no error either

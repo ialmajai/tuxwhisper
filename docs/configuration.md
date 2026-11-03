@@ -6,6 +6,9 @@ Open "TuxWhisper Settings" from your app grid (`./install.sh` adds it), run `tux
 bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without editing files:
 
 - Sounds on or off, and their volume
+- Other sounds while recording: mute what other apps are playing (music, radio, a video) while
+  a take records, and put it back after. Off by default, as it would also mute a call you're
+  dictating into. Needs PipeWire or PulseAudio (`pactl`).
 - Language
 - Paste key
 - Keys: the key for each action. Pick from a list or type any combination, such as

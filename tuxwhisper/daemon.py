@@ -76,6 +76,7 @@ class Dictation:
         self.mic = None
         self.mic_idle_since = 0.0
         self.take = None  # the recording take's token: the mic is the same object for every take
+        self.muted = []  # other apps' streams muted for the recording take (mute_others)
         self.indicator = None  # ID of the on-screen recording notification
         self.hint = None  # the settings key shown under "Recording…"; see refresh_hint()
         self.last_hint = -HINT_EVERY
@@ -222,6 +223,8 @@ class Dictation:
         self.live.wait(1)
         if self.take is token:
             desktop.sound("device-added")
+            if store.settings().mute_others:
+                self._mute_others(token)
         nid = desktop.notify(f"Recording ({llm.current_mode()})…" if rewrite else "Recording…",
                              persistent=True, body=self.hint, icon=MIC_ICON)
         with self.lock:
@@ -229,6 +232,16 @@ class Dictation:
                 self.indicator = nid
                 return
         desktop.close_notification(nid)
+
+    def _mute_others(self, token):
+        """Mute what other apps are playing, for the take token; back on when it stops. A take
+        stopped meanwhile (a quick tap) gets its sound back here."""
+        muted = desktop.playing_streams()
+        desktop.mute_streams(muted, True)
+        with self.lock:
+            if self.take is token:
+                self.muted, muted = muted, []
+        desktop.mute_streams(muted, False)
 
     def _stop(self, cut_at) -> TakeContext:
         """Stop recording (under self.lock), closing the mic unless it's kept open between
@@ -242,13 +255,14 @@ class Dictation:
         indicator, self.indicator = self.indicator, None
         desktop.sound("device-removed")
         chunks, self.chunks = self.chunks, []
+        muted, self.muted = self.muted, []
         long, self.long = self.long, None
         if long is not None:
             long.stop()  # the take's pipeline waits for a pass under way
         # This take's own mode: the next take may start before this one is pasted.
         ticket, self.next_ticket = self.next_ticket, self.next_ticket + 1
         return TakeContext(chunks, excess, self.rewrite, self.warming, ticket, indicator,
-                           dropped=self.dropped, long=long)
+                           dropped=self.dropped, long=long, muted=muted)
 
     def toggle(self, cut_at=None, rewrite=False):
         with self.lock:
@@ -261,6 +275,8 @@ class Dictation:
             if token is not None:
                 self._announce(token, rewrite)
             return
+        if take.muted:  # other apps' sound back on, off the take's path
+            threading.Thread(target=desktop.mute_streams, args=(take.muted, False), daemon=True).start()
         # Swap "Recording…" for "Transcribing…" in place: one notification, not a new popup.
         # Shown in the background: notify-send -p takes a while, and the take needn't wait.
         status = take.status = Status()

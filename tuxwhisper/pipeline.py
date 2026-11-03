@@ -58,6 +58,7 @@ class TakeContext:
     dropped: int = 0  # times the sound system lost audio while recording (input overflow)
     stopped_at: float = field(default_factory=time.monotonic)  # for the take's timing log
     long: LongTake | None = None  # its passes while it was recorded, if it may run long
+    muted: list = field(default_factory=list)  # other apps' streams muted while it recorded
 
     def audio(self, np):
         audio = np.concatenate(self.chunks)[:, 0] if self.chunks else []

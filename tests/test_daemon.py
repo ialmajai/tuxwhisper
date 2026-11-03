@@ -954,3 +954,37 @@ def test_history_write_failure_is_not_a_failed_dictation(monkeypatch):
     d.toggle()
     assert d.pasted == ["take1"]
     assert not any("failed" in m.lower() for m in notified)
+
+
+def fake_streams(monkeypatch, playing):
+    """Other apps' streams: playing lists their IDs; returns the mute/unmute calls made."""
+    calls = []
+    monkeypatch.setattr(desktop, "playing_streams", lambda: list(playing))
+    monkeypatch.setattr(desktop, "mute_streams",  # with no streams, the real one does nothing
+                        lambda ids, mute: calls.append((tuple(ids), mute)) if ids else None)
+    return calls
+
+
+def test_other_sounds_are_muted_while_recording_when_asked(monkeypatch):
+    d = make_dictation(monkeypatch)
+    calls = fake_streams(monkeypatch, ["7313"])
+    d.toggle()
+    d.toggle()
+    assert calls == []  # off by default: a call being dictated into must keep its sound
+    store.save_settings({"mute_others": True})
+    d.toggle()
+    assert calls == [(("7313",), True)] and d.muted == ["7313"]
+    d.toggle()
+    for t in threading.enumerate():  # the unmute runs off the take's path
+        if t is not threading.current_thread() and t.daemon:
+            t.join(2)
+    assert calls == [(("7313",), True), (("7313",), False)] and d.muted == []
+
+
+def test_a_take_stopped_before_its_streams_were_muted_gets_them_back(monkeypatch):
+    """The muting happens after the mic's first audio, off the lock: a quick tap can stop
+    the take first, and then the streams must not stay muted."""
+    d = make_dictation(monkeypatch)
+    calls = fake_streams(monkeypatch, ["7313"])
+    d._mute_others(object())  # for a take that is no longer d.take: it stopped meanwhile
+    assert calls == [(("7313",), True), (("7313",), False)] and d.muted == []

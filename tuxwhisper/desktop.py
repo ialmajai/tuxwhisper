@@ -217,6 +217,30 @@ def sound(name: str) -> None:
         spawn(cmd)
 
 
+def playing_streams() -> list[str]:
+    """The IDs of the apps' output streams that are playing unmuted (PipeWire or PulseAudio,
+    through pactl); [] without them. Only apps' own streams: a desktop's echo-cancel or
+    loopback stream carries all sound, the start and stop beeps included."""
+    try:
+        r = subprocess.run(["pactl", "list", "sink-inputs"], capture_output=True, text=True, timeout=2,
+                           env={**os.environ, "LC_ALL": "C"})  # "Mute: no" in English
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    streams = []
+    for block in r.stdout.split("Sink Input #")[1:]:
+        if "Mute: no" in block and "application.process.id" in block:
+            streams.append(block.split("\n", 1)[0].strip())
+    return streams
+
+
+def mute_streams(streams: list[str], mute: bool) -> None:
+    """Mute or unmute each stream; one that has ended since is skipped."""
+    for stream in streams:
+        with contextlib.suppress(FileNotFoundError, subprocess.TimeoutExpired):
+            subprocess.run(["pactl", "set-sink-input-mute", stream, "1" if mute else "0"],
+                           capture_output=True, timeout=2)
+
+
 def open_notifications_path():
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     return os.path.join(runtime, f"{store.APP}-notifications") if runtime else None

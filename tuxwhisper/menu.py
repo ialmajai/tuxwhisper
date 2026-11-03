@@ -365,6 +365,9 @@ SETTINGS = [
             "Beep when recording starts and stops"),
     Setting("sound_volume", "Sound volume", lambda s: f"{s.sound_volume}%", edit_sound_volume,
             "How loud the beeps are", after=lambda: desktop.sound("device-added")),  # a preview
+    Setting("mute_others", "Other sounds while recording", lambda s: "Muted" if s.mute_others else "Left playing",
+            lambda s: {"mute_others": not s.mute_others},
+            "Mute music, radio or a video while you dictate; back on after. Also mutes a call."),
 ]
 
 
