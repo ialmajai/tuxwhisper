@@ -113,13 +113,18 @@ class OOMModel(FakeModel):
         raise RuntimeError("CUDA failed with error out of memory")
 
 
-def fake_gpu(monkeypatch, free_gb, loads):
+def fake_gpu(monkeypatch, free_gb, loads, cpu=True):
     """Pretend the GPU has free_gb free: bigger models fail to load as out of memory. Models
-    that load are appended to loads."""
+    that load are appended to loads, the CPU fallback as "small (CPU)"; cpu=False makes it fail."""
     monkeypatch.setattr(engine, "DEVICE", "cuda")
     monkeypatch.setattr(engine, "free_gpu_gb", lambda: free_gb[0])
     monkeypatch.setattr(engine, "model_downloaded", lambda name: True)
-    def load(name):
+    def load(name, device="cuda"):
+        if device == "cpu":
+            if not cpu:
+                raise RuntimeError("no CPU fallback in this test")
+            loads.append(f"{name} (CPU)")
+            return FakeModel()
         if engine.model_size(name) > free_gb[0]:
             raise RuntimeError("CUDA failed with error out of memory")
         loads.append(name)

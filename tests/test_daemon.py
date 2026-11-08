@@ -211,7 +211,7 @@ def test_reload_out_of_memory_falls_back_and_still_pastes(monkeypatch):
 def test_no_model_fits_notifies_once_and_skips_the_take(monkeypatch):
     d = make_dictation(monkeypatch)
     d.models.model = OOMModel()
-    fake_gpu(monkeypatch, [0.05], [])
+    fake_gpu(monkeypatch, [0.05], [], cpu=False)
     d.toggle()
     d.toggle()
     assert d.pasted == []
@@ -236,7 +236,7 @@ def test_take_loads_a_model_once_there_is_room(monkeypatch):
     d = make_dictation(monkeypatch)
     d.models.model, d.models.fallback_from = None, "large-v3-turbo"
     free, loads = [0.05], []
-    fake_gpu(monkeypatch, free, loads)
+    fake_gpu(monkeypatch, free, loads, cpu=False)
     d.toggle()
     d.toggle()
     assert d.pasted == [] and loads == []
@@ -570,7 +570,7 @@ def test_take_that_runs_out_of_memory_again_after_switching_down_is_reported(mon
     d = make_dictation(monkeypatch)
     d.models.model = RunOOMModel()
     fake_gpu(monkeypatch, [1.2], [])
-    monkeypatch.setattr(engine, "load_whisper", lambda name: RunOOMModel())  # loads, then can't run
+    monkeypatch.setattr(engine, "load_whisper", lambda name, device=None: RunOOMModel())  # loads, then can't run
     d.toggle()
     d.toggle()
     assert d.pasted == [] and notified[-1] == "Not enough GPU memory to dictate"
@@ -579,7 +579,7 @@ def test_take_that_runs_out_of_memory_again_after_switching_down_is_reported(mon
 def test_take_with_no_model_that_fits_shows_only_the_memory_notice(monkeypatch):
     d = make_dictation(monkeypatch)
     d.models.model = RunOOMModel()
-    fake_gpu(monkeypatch, [0.05], [])
+    fake_gpu(monkeypatch, [0.05], [], cpu=False)
     d.toggle()
     d.toggle()
     assert "Not enough GPU memory to dictate" in notified and "Didn't catch that" not in notified

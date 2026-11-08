@@ -143,11 +143,11 @@ class FasterWhisperModel:
     word_timestamps = True
     vad_optional = True
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, device: str | None = None):
         from faster_whisper import WhisperModel
-        on_cpu = DEVICE == "cpu"
-        self.model = WhisperModel(name, device="cpu" if on_cpu else "cuda",
-                                  compute_type="int8" if on_cpu else "float16")
+        self.on_cpu = (device or DEVICE) == "cpu"
+        self.model = WhisperModel(name, device="cpu" if self.on_cpu else "cuda",
+                                  compute_type="int8" if self.on_cpu else "float16")
 
     def transcribe(self, audio, *, language=None, prompt=None, hotwords=None, vad_filter=True,
                    word_timestamps=False, fallback=True):
@@ -165,7 +165,8 @@ class FasterWhisperModel:
         self.model.model.load_model()
 
     def unload(self, to_cpu=True):
-        self.model.model.unload_model(to_cpu=to_cpu)
+        if not self.on_cpu:  # a CPU model has no GPU memory to free
+            self.model.model.unload_model(to_cpu=to_cpu)
 
 
 class WhisperCpp:
@@ -327,8 +328,8 @@ def free_gpu_gb() -> float | None:
 
 def load_smaller(name: str, tried: list[str] | None = None) -> tuple[SpeechModel, str] | None:
     """Try each downloaded model smaller than name, largest first, and return the first that
-    loads on the GPU as (model, its name), or None. Names tried are added to tried.
-    English-only models are tried only when English is set."""
+    loads on the GPU as (model, its name); if none fits, the CPU model, or None. Names tried
+    are added to tried. English-only models are tried only when English is set."""
     english = store.settings().language == "en"
     for cand, _, _ in sorted(asr_models(), key=lambda m: -model_size(m[0])):
         if (model_size(cand) >= model_size(name) or not model_downloaded(cand)
@@ -342,7 +343,28 @@ def load_smaller(name: str, tried: list[str] | None = None) -> tuple[SpeechModel
             if not out_of_memory(e):
                 raise
             log.info(f"{cand} doesn't fit either")
-    return None
+    return load_on_cpu(tried)
+
+
+def load_on_cpu(tried: list[str] | None = None) -> tuple[SpeechModel, str] | None:
+    """The CPU model (int8) when nothing fits on the GPU: slower, but it dictates. Only for the
+    CUDA engine, which also runs on the CPU; None if that fails too."""
+    if DEVICE != "cuda":
+        return None
+    name = f"{CPU_MODEL} (CPU)"
+    if tried is not None:
+        tried.append(name)
+    downloading = None
+    if not model_downloaded(CPU_MODEL):
+        downloading = desktop.notify(f"Downloading the speech model {CPU_MODEL} for the CPU…", persistent=True,
+                                     body="<i>About 0.5 GB. Dictation starts when it's ready.</i>")
+    try:
+        return load_whisper(CPU_MODEL, "cpu"), name
+    except Exception as e:  # noqa: BLE001 - the last resort failing is reported, not raised into a take
+        log.info(f"couldn't load {CPU_MODEL} on the CPU ({e})")
+        return None
+    finally:
+        desktop.close_notification(downloading)
 
 
 def no_memory_notice(tried: list[str] | None = None) -> None:
@@ -357,13 +379,14 @@ def fallback_notice(name: str, preferred: str) -> None:
                    level="warn")
 
 
-def load_whisper(name: str) -> SpeechModel:
-    """Load a speech model and run it once. Running needs working memory beyond the weights,
-    and on a nearly full GPU that's where it runs out, so the out-of-memory fallbacks must
-    see it here, at load time, rather than crash the daemon's start or a take."""
+def load_whisper(name: str, device: str | None = None) -> SpeechModel:
+    """Load a speech model (on DEVICE, or device) and run it once. Running needs working memory
+    beyond the weights, and on a nearly full GPU that's where it runs out, so the out-of-memory
+    fallbacks must see it here, at load time, rather than crash the daemon's start or a take."""
     import numpy as np
-    log.info(f"loading {name} on {DEVICE} ...")
-    model = WhisperCpp(name) if DEVICE == "vulkan" else FasterWhisperModel(name)
+    device = device or DEVICE
+    log.info(f"loading {name} on {device} ...")
+    model = WhisperCpp(name) if device == "vulkan" else FasterWhisperModel(name, device)
     try:
         model.transcribe(np.zeros(16000, dtype=np.float32), vad_filter=False)  # warm-up
     except Exception:
@@ -384,7 +407,7 @@ def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
     """Whisper on an NVIDIA GPU (default), on another GPU with ASR_DEVICE=vulkan, or on the CPU
     with ASR_DEVICE=cpu (int8, smaller model). A first use downloads the model; a model that
     won't load falls back to the engine's default instead of failing at every start, and one
-    that doesn't fit in GPU memory to a smaller one. Returns (model, its name, the model it
+    that doesn't fit in GPU memory to a smaller one, or the CPU. Returns (model, its name, the model it
     replaced); the model and its name are None when none fits in GPU memory yet."""
     name, default = asr_model(), default_asr_model()
     for attempt in dict.fromkeys([name, default]):
@@ -442,8 +465,8 @@ NO_ROOM_BACKOFF = 30
 
 class ModelManager:
     """The speech model in use and what keeps it usable: loading it back after an idle unload,
-    stepping down to a smaller model when the GPU runs out of memory (loading or running), and
-    going back to the chosen one once there's room."""
+    stepping down to a smaller model (or the CPU) when the GPU runs out of memory (loading or
+    running), and going back to the chosen one once there's room."""
 
     def __init__(self, model: SpeechModel | None, name: str | None = None, fallback_from: str | None = None):
         """model: loaded and warmed up, or None if none fit in GPU memory yet; name: its name;

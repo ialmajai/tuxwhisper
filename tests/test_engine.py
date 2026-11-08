@@ -15,7 +15,7 @@ from tuxwhisper import engine, store
     (1.2, "small", ["medium", "small"]),
     (0.3, "base", ["medium", "small", "base"]),
     (0.1, "tiny", ["medium", "small", "base", "tiny"]),
-    (0.05, None, ["medium", "small", "base", "tiny"]),
+    (0.05, "small (CPU)", ["medium", "small", "base", "tiny", "small (CPU)"]),
 ])
 def test_load_smaller_tries_each_smaller_model_largest_first(monkeypatch, free, expected, tried):
     fake_gpu(monkeypatch, [free], [])
@@ -35,7 +35,7 @@ def test_load_smaller_uses_english_only_models_only_for_english(monkeypatch):
 
 def test_chosen_model_is_loaded_once_it_fits_after_none_did_at_startup(monkeypatch):
     loads, free = [], [0.05]
-    fake_gpu(monkeypatch, free, loads)
+    fake_gpu(monkeypatch, free, loads, cpu=False)
     models = engine.ModelManager(*engine.load_model())  # nothing fits: no model yet
     assert models.model is None and not models.ensure_loaded()
     free[0] = 3.0  # another program freed the GPU
@@ -48,7 +48,7 @@ def test_chosen_model_is_loaded_once_it_fits_after_none_did_at_startup(monkeypat
 def test_no_room_is_not_retried_on_every_take(monkeypatch):
     """A round of failing loads costs seconds; takes soon after one skip it (the idle watcher
     checks for room meanwhile), and the user is still told."""
-    fake_gpu(monkeypatch, [0.05], [])
+    fake_gpu(monkeypatch, [0.05], [], cpu=False)
     attempts = []
     load = engine.load_whisper
     monkeypatch.setattr(engine, "load_whisper", lambda name: attempts.append(name) or load(name))
@@ -71,9 +71,28 @@ def test_startup_out_of_memory_falls_back(monkeypatch):
 
 
 def test_startup_with_no_room_waits_instead_of_exiting(monkeypatch):
-    fake_gpu(monkeypatch, [0.05], [])
+    fake_gpu(monkeypatch, [0.05], [], cpu=False)
     assert engine.load_model() == (None, None, "large-v3-turbo")
     assert notified == ["Not enough GPU memory to dictate"]
+
+
+def test_nothing_fits_on_the_gpu_falls_back_to_the_cpu_and_back(monkeypatch):
+    free, loads = [0.05], []
+    fake_gpu(monkeypatch, free, loads)
+    m = engine.ModelManager(*engine.load_model())
+    assert m.name == "small (CPU)" and m.fallback_from == "large-v3-turbo"
+    assert notified == ["GPU memory is short: using small (CPU)"]
+    assert m.ensure_loaded() and loads == ["small (CPU)"]  # it stays: no reload per take
+    free[0] = 4.0
+    m.restore_if_room()
+    assert m.name == "large-v3-turbo" and m.fallback_from is None
+    assert loads == ["small (CPU)", engine.GPU_MODEL]
+
+
+def test_cpu_fallback_is_only_for_the_cuda_engine(monkeypatch):
+    fake_gpu(monkeypatch, [0.05], [])
+    monkeypatch.setattr(engine, "DEVICE", "vulkan")
+    assert engine.load_smaller("large-v3-turbo") is None
 
 
 def test_download_verified_refuses_a_wrong_checksum(monkeypatch, tmp_path):
