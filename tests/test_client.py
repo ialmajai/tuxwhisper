@@ -13,7 +13,7 @@ def fake_systemctl(monkeypatch, state):
     """The daemon isn't answering and systemd reports it as state; the commands run are returned."""
     monkeypatch.setattr(client, "request", lambda cmd, timeout=5: None)
     ran = []
-    monkeypatch.setattr(client.subprocess, "run", lambda cmd, **k: ran.append(cmd) or types.SimpleNamespace(
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **k: ran.append(cmd) or types.SimpleNamespace(
         returncode=0, stdout=state + "\n"))
     with pytest.raises(SystemExit):
         client.send("toggle")

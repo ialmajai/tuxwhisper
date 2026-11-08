@@ -1,14 +1,10 @@
-"""Paths, settings and the files shared by the daemon, the menu and the CLI."""
-import contextlib
-import csv
+"""Paths, settings and the files shared by the daemon, the menu and the CLI.
+
+Every key press imports this module, so the heavier standard modules (tomllib, json, csv, re,
+shutil) are imported where they're used, not here: together they cost a press about 20 ms."""
 import fcntl
-import io
-import json
 import os
-import re
-import shutil
 import time
-import tomllib
 
 APP = "tuxwhisper"
 PASTE_KEYS = {"shift+insert": ["KEY_LEFTSHIFT", "KEY_INSERT"],
@@ -30,20 +26,25 @@ REPLACEMENTS = os.path.join(CONFIG_DIR, "replacements.txt")
 OLD_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-@contextlib.contextmanager
-def file_lock(path):
+class file_lock:
     """Serialise a read-change-write of path between the daemon and the menu or CLI, which
-    otherwise each write their own stale copy and lose the other's change."""
-    runtime = os.environ.get("XDG_RUNTIME_DIR")
-    if not runtime:
-        yield
-        return
-    with open(os.path.join(runtime, f"{APP}-{os.path.basename(path)}.lock"), "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+    otherwise each write their own stale copy and lose the other's change. Does nothing
+    without XDG_RUNTIME_DIR (nowhere private to keep the lock)."""
+
+    def __init__(self, path):
+        self.path = path
+        self.f = None
+
+    def __enter__(self):
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if runtime:
+            self.f = open(os.path.join(runtime, f"{APP}-{os.path.basename(self.path)}.lock"), "a")
+            fcntl.flock(self.f, fcntl.LOCK_EX)
+
+    def __exit__(self, *exc):
+        if self.f:
+            fcntl.flock(self.f, fcntl.LOCK_UN)
+            self.f.close()
 
 
 _instance_locks = []  # held open (and so locked) until the process exits
@@ -90,6 +91,7 @@ def atomic_write(path: str, text: str) -> None:
 def read_config() -> dict[str, object]:
     """Only the settings changed in the menu. An unreadable file counts as empty (defaults),
     but is reported once, and save_settings keeps a copy of it rather than overwriting it."""
+    import tomllib
     try:
         with open(CONFIG, "rb") as f:
             return tomllib.load(f)
@@ -132,6 +134,7 @@ def vocab() -> str | None:
 
 
 def apply_replacements(text: str) -> str:
+    import re
     try:
         with open(REPLACEMENTS) as f:
             rules = [line.split("=>", 1) for line in f if "=>" in line and not line.startswith("#")]
@@ -164,6 +167,7 @@ WAV_HEADER = 44  # bytes before the samples in the files write_recording makes; 
 def dataset_frames(meta: str) -> tuple[int, int]:
     """(takes, samples) of the recordings listed in meta, from the files' sizes (no need to
     open each one)."""
+    import csv
     takes, frames = 0, 0
     with open(meta, newline="") as f:
         for row in csv.DictReader(f):
@@ -183,6 +187,7 @@ def history_path() -> str | None:
 
 
 def load_history() -> list[dict]:
+    import json
     try:
         with open(history_path()) as f:
             return json.load(f)
@@ -204,6 +209,7 @@ def add_history(text: str, rewritten: bool = False, typed: bool = False, replace
 
 
 def save_history(items: list[dict]) -> None:
+    import json
     atomic_write(history_path(), json.dumps(items))
 
 
@@ -255,6 +261,7 @@ LANGUAGES = {
 
 
 def toml_value(v):
+    import json
     if isinstance(v, bool):
         return str(v).lower()
     if isinstance(v, dict):  # inline table
@@ -268,6 +275,7 @@ def save_settings(s: dict[str, object]) -> None:
     keys (hand-added; nothing reads them) are left out: some, such as dates or arrays of
     tables, can't be written back here and would make the file unreadable."""
     import dataclasses
+    import tomllib
 
     from tuxwhisper.settings import Settings
     known = {f.name for f in dataclasses.fields(Settings)}
@@ -315,6 +323,8 @@ def set_pending_model(name: str | None) -> None:
 
 def fix_recording_text(name: str, text: str) -> None:
     """Replace the transcript of recordings/name in metadata.csv."""
+    import csv
+    import io
     meta = os.path.join(RECORDINGS, "metadata.csv")
     with file_lock(meta):  # F4 appends to the same file
         with open(meta, newline="") as f:
@@ -330,4 +340,5 @@ def fix_recording_text(name: str, text: str) -> None:
 def command_path() -> str:
     """How shortcuts, the service and the launcher run TuxWhisper: ./asr in a git clone (the
     wrapper sets TUXWHISPER_CMD), else the `tuxwhisper` command that pip or uv installed."""
+    import shutil
     return os.environ.get("TUXWHISPER_CMD") or shutil.which(APP) or os.path.join(OLD_REPO, "asr")

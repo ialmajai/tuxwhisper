@@ -1,5 +1,5 @@
 //! TuxWhisper's key-press client. GNOME runs a command on every key press, and starting
-//! Python for it takes 120-230 ms; this sends the key's command to the daemon's socket in
+//! Python for it takes 15-50 ms; this sends the key's command to the daemon's socket in
 //! about a millisecond. Anything else (the daemon isn't running or still starting, no
 //! desktop session) goes to the Python client, which knows what to do and say:
 //! `$TUXWHISPER_CMD <command>`, with TUXWHISPER_SLOW=1 so the wrapper doesn't come back here.

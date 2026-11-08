@@ -13,7 +13,7 @@
 - **Key presses:** each press runs `asr toggle` (or `rewrite`, `save`), which only passes the
   word to the daemon. In a git clone with [Rust](https://rustup.rs) installed, `install.sh`
   builds a small client for this in `client-rs/`: it takes about 1 ms where starting Python
-  takes about 80. Without it, or when the daemon isn't running, the Python client does it.
+  takes 15 to 50. Without it, or when the daemon isn't running, the Python client does it.
 - **Typing:** Wayland doesn't let apps type into other windows, so TuxWhisper puts the
   text on the clipboard (`xclip`, or `wl-clipboard` without XWayland) and presses the paste
   key through a virtual keyboard (`/dev/uinput`). Shortly after, it restores your previous

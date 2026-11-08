@@ -8,7 +8,7 @@ else  # without readlink and dirname: two programs fewer to start on every key p
     DIR="$(cd "$DIR" && pwd)"
 fi
 # Key presses go to the Rust client when it's built (client-rs/; install.sh builds it if Rust
-# is installed): starting Python takes 120-230 ms of every press. It hands back to Python,
+# is installed): starting Python takes 15-50 ms of every press. It hands back to Python,
 # with TUXWHISPER_SLOW set, whenever the daemon isn't there to take the command.
 KEY="$DIR/client-rs/target/release/tuxwhisper-key"
 case "${1:-}" in toggle|rewrite|save)
@@ -22,4 +22,7 @@ for SITE in "$DIR"/.venv/lib/python3*/site-packages; do
     [ -e "$SITE/libwhisper.so.1" ] && export LD_LIBRARY_PATH="$SITE${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 done
 export TUXWHISPER_CMD="$DIR/asr" TUXWHISPER_LIBS_SET=1 PYTHONPATH="$DIR${PYTHONPATH:+:$PYTHONPATH}"
+case "${1:-}" in toggle|rewrite|save)
+    exec "$DIR/.venv/bin/python" -S -m tuxwhisper "$@" ;;  # -S: no site-packages needed; 6 ms less
+esac
 exec "$DIR/.venv/bin/python" -m tuxwhisper "$@"

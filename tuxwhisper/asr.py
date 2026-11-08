@@ -13,8 +13,6 @@
 From a git clone, `./asr` runs the same commands.
 """
 import os
-import shutil
-import subprocess
 import sys
 
 from tuxwhisper import store
@@ -22,6 +20,7 @@ from tuxwhisper import store
 
 def migrate_old_files():
     """Move lists and recordings from a pre-0.2 git clone to the standard folders, once."""
+    import shutil
     moves = [(os.path.join(store.OLD_REPO, name), os.path.join(store.CONFIG_DIR, name))
              for name in ("vocab.txt", "replacements.txt", "modes.txt")]
     moves.append((os.path.join(store.OLD_REPO, "recordings"), store.RECORDINGS))
@@ -49,6 +48,7 @@ def add_library_path():
 
 def run_script(name, args):
     """Run install.sh or uninstall.sh: shipped inside the package, or at the top of a git clone."""
+    import subprocess
     packaged = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", name)
     script = packaged if os.path.exists(packaged) else os.path.join(store.OLD_REPO, name)
     env = dict(os.environ, TUXWHISPER_CMD=store.command_path(), TUXWHISPER_PY=sys.executable)

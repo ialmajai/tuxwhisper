@@ -1,11 +1,12 @@
 """The key commands' side of the daemon's socket: kept apart from the daemon so a key press
-imports only this, not the speech or LLM code (tens of ms on every press)."""
+imports only this, not the speech or LLM code (tens of ms on every press). desktop and
+subprocess are imported only when something has gone wrong: a press that reaches the daemon
+needs neither, and together they cost it 10 ms."""
 import os
 import socket
-import subprocess
 import sys
 
-from tuxwhisper import desktop, store
+from tuxwhisper import store
 
 
 def sock_path() -> str:
@@ -13,6 +14,7 @@ def sock_path() -> str:
     # other local users reach the socket, so refuse to run without it.
     runtime = os.environ.get("XDG_RUNTIME_DIR")
     if not runtime:  # an OSError, so callers such as request() handle it instead of exiting
+        from tuxwhisper import desktop
         desktop.notify("TuxWhisper needs a desktop session", body="XDG_RUNTIME_DIR is not set.", level="error")
         raise OSError("XDG_RUNTIME_DIR is not set; run this from a desktop session")
     return os.path.join(runtime, f"{store.APP}.sock")
@@ -34,6 +36,9 @@ def request(cmd: str, timeout: float = 60) -> str | None:
 def send(cmd: str) -> None:
     """Send a key's command to the daemon; it answers by closing the connection."""
     if request(cmd, timeout=5) is None:
+        import subprocess
+
+        from tuxwhisper import desktop
         state = subprocess.run(["systemctl", "--user", "is-active", store.APP],
                                capture_output=True, text=True).stdout.strip()
         if state in ("active", "activating"):  # loading its model: the socket isn't up yet
