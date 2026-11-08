@@ -565,8 +565,8 @@ class ModelManager:
                 and time.monotonic() - self.last_used > minutes * 60
                 and self.lock.acquire(blocking=False)):  # not while one is transcribing
             try:
-                if self.model is not None and self.model.loaded():
-                    self.model.unload()
+                if self.model is not None and self.model.loaded() and not getattr(self.model, "on_cpu", False):
+                    self.model.unload()  # not a CPU fallback: it holds no GPU memory
                     log.info(f"speech model unloaded after {minutes} min idle")
             finally:
                 self.lock.release()

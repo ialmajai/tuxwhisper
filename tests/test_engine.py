@@ -89,6 +89,15 @@ def test_nothing_fits_on_the_gpu_falls_back_to_the_cpu_and_back(monkeypatch):
     assert loads == ["small (CPU)", engine.GPU_MODEL]
 
 
+def test_idle_unload_leaves_a_cpu_fallback_alone(monkeypatch):
+    fake_gpu(monkeypatch, [0.05], [])
+    m = engine.ModelManager(*engine.load_model())
+    m.model.on_cpu = True  # as FasterWhisperModel marks it
+    m.last_used = 0.0
+    m.unload_if_idle(1, idle=True)
+    assert m.model.loaded()  # nothing to free, and no "unloaded" log every 15 s
+
+
 def test_cpu_fallback_is_only_for_the_cuda_engine(monkeypatch):
     fake_gpu(monkeypatch, [0.05], [])
     monkeypatch.setattr(engine, "DEVICE", "vulkan")

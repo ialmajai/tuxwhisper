@@ -429,11 +429,13 @@ def zenity(*args: str) -> str | None:
         r = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError as e:
         raise RuntimeError(f"{cmd[0]} isn't installed") from e
+    out = r.stdout.strip()
+    if r.returncode == 1 and out and f"--extra-button={out}" in args:
+        return out  # zenity prints an extra button's label, with Cancel's exit code
     if r.returncode in DIALOG_CANCELLED:
         return None
     if r.returncode != 0:
         raise RuntimeError(f"{cmd[0]} failed ({r.returncode}): {r.stderr.strip()}")
-    out = r.stdout.strip()
     return out.removesuffix("|") if have_yad() and "--list" in args else out  # yad ends list rows with |
 
 

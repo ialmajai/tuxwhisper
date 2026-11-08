@@ -296,6 +296,41 @@ def test_picking_an_english_only_model_with_another_language_set_asks_first(monk
     assert [a[0] for a in dialogs] == ["--list", "--question"] and switched == []  # said No: not switched
 
 
+def test_quit_button_stops_the_daemon_after_asking(monkeypatch):
+    monkeypatch.setattr(menu.shutil, "which", lambda name: "/usr/bin/zenity")
+    monkeypatch.setattr(menu, "keys_summary", lambda: "")
+    choices = iter(["quit", "quit", None])
+    monkeypatch.setattr(menu, "menu_choice", lambda rows: next(choices))
+    answers = iter([None, ""])  # first No, then Yes
+    monkeypatch.setattr(desktop, "zenity", lambda *args: next(answers))
+    ran = []
+    monkeypatch.setattr(menu.subprocess, "run", lambda cmd, **k: ran.append(cmd) or types.SimpleNamespace(returncode=0))
+    menu.settings_menu()
+    assert ran == [["systemctl", "--user", "stop", "tuxwhisper"]]  # said No once, then stopped
+    assert next(choices) is None  # the menu closed with the daemon: the last choice wasn't shown
+    assert notified[-1] == "TuxWhisper stopped"
+
+
+def test_quit_that_fails_to_stop_the_service_says_so_and_keeps_the_menu(monkeypatch):
+    monkeypatch.setattr(menu.shutil, "which", lambda name: "/usr/bin/zenity")
+    monkeypatch.setattr(menu, "keys_summary", lambda: "")
+    choices = iter(["quit", None])
+    monkeypatch.setattr(menu, "menu_choice", lambda rows: next(choices))
+    monkeypatch.setattr(desktop, "zenity", lambda *args: "")  # Yes
+    monkeypatch.setattr(menu.subprocess, "run", lambda cmd, **k: types.SimpleNamespace(returncode=5))
+    menu.settings_menu()
+    assert notified[-1] == "Couldn't stop TuxWhisper" and next(choices, "closed") == "closed"  # the menu went on
+
+
+def test_zenity_menu_quit_button_and_choices(monkeypatch):
+    monkeypatch.setattr(desktop, "have_yad", lambda: False)
+    replies = iter([(1, menu.QUIT + "\n"), (0, "keys\n"), (1, "")])
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **k: types.SimpleNamespace(
+        returncode=(reply := next(replies))[0], stdout=reply[1], stderr=""))
+    rows = [("keys", "Keys", "F5", "The keys")]
+    assert [menu.menu_choice(rows) for _ in range(3)] == ["quit", "keys", None]
+
+
 def test_yad_menu_shows_the_logo_and_parts_the_groups_with_lines(monkeypatch):
     cmds = []
     monkeypatch.setattr(desktop, "have_yad", lambda: True)
@@ -306,6 +341,7 @@ def test_yad_menu_shows_the_logo_and_parts_the_groups_with_lines(monkeypatch):
     assert menu.menu_choice(rows) == "keys"
     cmd = cmds[0]
     assert f"--image={desktop.LOGO}" in cmd and os.path.exists(desktop.LOGO) and "--sep-column=1" in cmd and f"--sep-value={menu.SEPARATOR}" in cmd
+    assert f"--button={menu.QUIT}:2" in cmd
     assert cmd[cmd.index("--") + 1:] == [
         "<b>Recent transcripts</b>", '3 <span alpha="55%">(default)</span>', "Your last", menu.SEPARATOR, "", "",
         "<b>Language</b>", "English", "Spoken", menu.SEPARATOR, "", "", "<b>Keys &amp; more</b>", "F5", "The keys"]

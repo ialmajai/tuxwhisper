@@ -3,7 +3,9 @@
 ## Settings menu
 
 Open "TuxWhisper Settings" from your app grid (`./install.sh` adds it), run `tuxwhisper settings` (`./asr settings` in a git clone), or
-bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without editing files:
+bind `/home/<you>/tuxwhisper/asr settings` to a key, to change these without editing files.
+Its **Quit TuxWhisper** button stops the background service; the dictation key, or your next
+login, starts it again.
 
 - Sounds on or off, and their volume
 - Other sounds while recording: mute what other apps are playing (music, radio, a video) while

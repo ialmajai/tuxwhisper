@@ -142,11 +142,12 @@ def pick_asr_model(current):
 
 GROUP_STARTS = ("language", "mode", "keys")  # the rows a new group of settings starts at
 SEPARATOR = "—"  # a yad row whose Setting column is this is drawn as a line between groups
+QUIT = "Quit TuxWhisper"  # the menu's third button, returned by menu_choice as the key "quit"
 
 
 def menu_choice(rows):
-    """Show the settings list (rows: (key, setting, value, help)) and return the picked key or
-    None, with each row's help in a column of its own."""
+    """Show the settings list (rows: (key, setting, value, help)) and return the picked key,
+    "quit" for the Quit TuxWhisper button, or None, with each row's help in a column of its own."""
     text = "--text=Pick a row to change it. Most changes apply to your next dictation."
     if desktop.have_yad():
         # The logo by the heading, and the groups of rows parted by lines. No hidden key column here, so rows are told apart by their names.
@@ -165,17 +166,40 @@ def menu_choice(rows):
                             "--column=Setting", "--column=Value", "--column=What it does",
                             "--print-column=1", "--sep-column=1", f"--sep-value={SEPARATOR}",
                             "--no-click", "--expand-column=3",  # headers don't re-sort the groups
-                            "--button=Close:1", "--button=Select:0", "--",
+                            f"--button={QUIT}:2", "--button=Close:1", "--button=Select:0", "--",
                             *[x for row in shown for x in row]],
                            capture_output=True, text=True)
+        if r.returncode == 2:
+            return "quit"
         name = r.stdout.strip().split("|")[0]
         return by_name.get(name) if r.returncode == 0 else None
     choice = desktop.zenity("--list", "--title=TuxWhisper Settings",
                     *desktop.fit(("Setting", "Value", "What it does"), [row[1:] for row in rows]), text,
                     "--column=key", "--column=Setting", "--column=Value", "--column=What it does",
                     "--hide-column=1", "--print-column=1", "--ok-label=Select", "--cancel-label=Close",
-                    *[x for row in rows for x in row])
+                    f"--extra-button={QUIT}", *[x for row in rows for x in row])
+    if choice == QUIT:
+        return "quit"
     return choice.split("|")[0] if choice else None
+
+
+def quit_daemon():
+    """Stop the daemon until the dictation key or the next login starts it again. The menu
+    closes with it: its rows are about a running TuxWhisper."""
+    if desktop.zenity("--question", "--title=Quit TuxWhisper",
+                      "--text=Stop TuxWhisper? Dictation stops until you press the dictation key "
+                      "or log in again.") is None:
+        return False
+    try:
+        stopped = subprocess.run(["systemctl", "--user", "stop", store.APP], capture_output=True).returncode == 0
+    except FileNotFoundError:  # no systemd: the daemon was started some other way
+        stopped = False
+    if not stopped:
+        desktop.notify("Couldn't stop TuxWhisper", level="error",
+                       body="It isn't running as a service here; stop the `tuxwhisper serve` process instead.")
+        return False
+    desktop.notify("TuxWhisper stopped", body="The dictation key, or your next login, starts it again.")
+    return True
 
 
 def unload_label(minutes, never):
@@ -419,6 +443,10 @@ def settings_menu():
         choice = menu_choice(rows)
         if not choice:
             return
+        if choice == "quit":
+            if quit_daemon():
+                return
+            continue
         row = next(r for r in SETTINGS if r.key == choice)
         changes = row.edit(s)
         if changes is not None:
