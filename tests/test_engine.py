@@ -153,6 +153,23 @@ def test_plausible(text, sound, ok):
     assert engine.plausible(text, burst(sound)) is ok
 
 
+def test_model_known_not_to_fit_is_not_read_from_disk(monkeypatch):
+    """A failing CUDA load reads the whole model first (3-17 s each down the ladder, inside a
+    take): when nvidia-smi says it can't fit, fail at once, as the same out-of-memory."""
+    built = []
+    monkeypatch.setattr(engine, "DEVICE", "cuda")
+    monkeypatch.setattr(engine, "FasterWhisperModel", lambda name, device=None: built.append(name))
+    monkeypatch.setattr(engine, "free_gpu_gb", lambda: 0.5)
+    with pytest.raises(RuntimeError) as e:
+        engine.load_whisper("medium")  # 1.5 GB + margin
+    assert engine.out_of_memory(e.value) and built == []
+    monkeypatch.setattr(engine, "free_gpu_gb", lambda: None)  # can't tell: try, as before
+    with pytest.raises(AttributeError):  # the fake model has no transcribe: it got as far as loading
+        engine.load_whisper("medium")
+    assert built == ["medium"]
+    assert engine.room_short("/some/custom/model") == 0.0  # unknown size: never refused
+
+
 def test_failed_warm_up_frees_the_model(monkeypatch):
     freed = []
 

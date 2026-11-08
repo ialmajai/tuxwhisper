@@ -326,6 +326,15 @@ def free_gpu_gb() -> float | None:
         return None
 
 
+def room_short(name: str) -> float:
+    """How many GB the GPU is short of loading menu model name, to one decimal; 0 if it fits,
+    or when that can't be told (no nvidia-smi, or a model the menu doesn't know)."""
+    free, size = free_gpu_gb(), model_size(name)
+    if free is None or size == float("inf"):
+        return 0.0
+    return max(0.0, round(size + GPU_MARGIN_GB - free, 1))
+
+
 def load_smaller(name: str, tried: list[str] | None = None) -> tuple[SpeechModel, str] | None:
     """Try each downloaded model smaller than name, largest first, and return the first that
     loads on the GPU as (model, its name); if none fits, the CPU model, or None. Names tried
@@ -385,6 +394,9 @@ def load_whisper(name: str, device: str | None = None) -> SpeechModel:
     fallbacks must see it here, at load time, rather than crash the daemon's start or a take."""
     import numpy as np
     device = device or DEVICE
+    if device == "cuda" and (short := room_short(name)):
+        # Known not to fit: don't read the whole model from disk (3-17 s) to be told so.
+        raise RuntimeError(f"CUDA out of memory: {name} needs about {short} GB more than is free")
     log.info(f"loading {name} on {device} ...")
     model = WhisperCpp(name) if device == "vulkan" else FasterWhisperModel(name, device)
     try:
