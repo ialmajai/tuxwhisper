@@ -319,9 +319,10 @@ def test_retype_refuses_while_a_take_is_in_flight(monkeypatch):
     d = make_dictation(monkeypatch)
     d.paster.ec = types.SimpleNamespace(EV_KEY=1, KEY_BACKSPACE=14)
     d.paster.kbd = FakeKeyboard()
+    at = real_add_history("Hello", typed=True)["at"]  # the correction is for the last take
     d.next_ticket = 1  # a take stopped but isn't pasted yet
     with open(store.retype_path(), "w") as f:
-        f.write('{"delete": 6, "text": "Hello"}')
+        f.write(json.dumps({"delete": 6, "text": "Hello", "at": at}))
     assert not d.retype() and d.paster.kbd.keys == []
 
 
@@ -988,3 +989,51 @@ def test_a_take_stopped_before_its_streams_were_muted_gets_them_back(monkeypatch
     calls = fake_streams(monkeypatch, ["7313"])
     d._mute_others(object())  # for a take that is no longer d.take: it stopped meanwhile
     assert calls == [(("7313",), True), (("7313",), False)] and d.muted == []
+
+
+def test_failed_mic_start_closes_the_stream(monkeypatch):
+    d = make_dictation(monkeypatch)
+    closed = []
+    monkeypatch.setattr(FakeStream, "close", lambda self: closed.append(True))
+    FakeStream.fail_start = True
+    d.toggle()
+    assert d.stream is None and d.mic is None and closed  # the device isn't kept open
+
+
+def test_idle_watcher_survives_a_failed_check(monkeypatch):
+    d = make_dictation(monkeypatch)
+    ticks = iter([None, None])
+    monkeypatch.setattr(daemon.time, "sleep", lambda s: next(ticks))  # two ticks, then StopIteration ends the loop
+    d.unload_if_idle = lambda: (_ for _ in ()).throw(RuntimeError("CUDA driver version is insufficient"))
+    released = []
+    d.release_idle_mic = lambda: released.append(True)
+    with pytest.raises(StopIteration):
+        d._watch_idle()
+    assert released == []  # the failed tick skipped the rest...
+    d.unload_if_idle = lambda: None
+    ticks = iter([None])
+    with pytest.raises(StopIteration):
+        d._watch_idle()
+    assert released == [True]  # ...but the watcher went on to the next one
+
+
+def test_holding_the_save_key_with_nothing_to_save_says_so_once(monkeypatch):
+    d = make_dictation(monkeypatch)
+    clock = [100.0]
+    monkeypatch.setattr(recordings.time, "monotonic", lambda: clock[0])
+    for _ in range(5):  # auto-repeats of a held key
+        d.save()
+        clock[0] += 0.1
+    assert notified == ["Nothing to save"]
+    clock[0] += 2
+    d.save()
+    assert notified == ["Nothing to save"] * 2  # a new press says it again
+
+
+def test_save_key_uses_the_desktop_s_repeat_delay(monkeypatch):
+    d = make_dictation(monkeypatch)
+    d.REPEAT_WINDOW = 1.0  # from gsettings; longer than the class default
+    windows = []
+    d.recordings.save = lambda window: windows.append(window)
+    d.save()
+    assert windows == [1.0]

@@ -1,4 +1,5 @@
 """The dictation daemon: the mic, key presses and holds, and taking turns to paste."""
+import contextlib
 import json
 import logging
 import os
@@ -9,11 +10,6 @@ import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from tuxwhisper import desktop, engine, llm, store
-from tuxwhisper.client import (  # noqa: F401 - re-exported for menu and tests
-    request,
-    send,
-    sock_path,
-)
 from tuxwhisper.pipeline import (
     MIC_ICON,
     Paster,
@@ -131,9 +127,12 @@ class Dictation:
         in the menu."""
         while True:
             time.sleep(15)
-            self.unload_if_idle()
-            self.restore_preferred_model()
-            self.release_idle_mic()
+            try:
+                self.unload_if_idle()
+                self.restore_preferred_model()
+                self.release_idle_mic()
+            except Exception:  # a GPU hiccup costs one tick, not the watcher
+                log.exception("idle check failed")
 
     def release_idle_mic(self):
         """Close a mic kept open between takes once it has been idle for mic_open_minutes."""
@@ -176,6 +175,7 @@ class Dictation:
         if self.mic is not None and not getattr(self.mic, "active", True):
             self._close_mic()  # dropped out while idle (unplugged, PipeWire restarted): reopen it
         self.take = token = object()
+        mic = None
         try:
             if self.mic is None:
                 mic = self.sd.InputStream(
@@ -188,6 +188,9 @@ class Dictation:
                 self.stream = self.mic  # still open: recording starts with its next block
         except Exception as e:  # noqa: BLE001 - unplugged, busy or no mic: stay ready
             self.stream = self.take = None
+            if mic is not None:  # opened but not started: don't keep the device
+                with contextlib.suppress(Exception):
+                    mic.close()
             log.info(f"microphone unavailable: {e}")
             desktop.notify("Microphone unavailable", body="Check that it's connected and not in use.",
                            level="error")
@@ -312,7 +315,7 @@ class Dictation:
 
     def save(self):
         """Offer to save the last take for fine-tuning, after the user checks its transcript."""
-        self.recordings.save(Dictation.REPEAT_WINDOW)
+        self.recordings.save(self.REPEAT_WINDOW)
 
     def retype(self):
         """Replace the last dictation with its correction (from retype_path()): erase what was

@@ -284,10 +284,10 @@ def save_settings(s: dict[str, object]) -> None:
     try:
         with open(CONFIG, "rb") as f:
             tomllib.load(f)
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError):  # keep what can't be read, instead of overwriting it
-        os.replace(CONFIG, f"{CONFIG}.unreadable-{time.strftime('%Y%m%d-%H%M%S')}")
     except FileNotFoundError:
         pass
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError, OSError):  # keep what can't be read, instead of overwriting it
+        os.replace(CONFIG, f"{CONFIG}.unreadable-{time.strftime('%Y%m%d-%H%M%S')}")
     atomic_write(CONFIG, "# Written by the settings menu; overrides the ASR_* environment variables.\n"
                  + "".join(f"{k} = {toml_value(v)}\n" for k, v in s.items()))
 

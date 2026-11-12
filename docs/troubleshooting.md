@@ -60,7 +60,8 @@ TuxWhisper couldn't use the GPU or the CUDA libraries. Check that `nvidia-smi` w
 <summary><b>"Not enough GPU memory" for the speech model</b></summary>
 
 Another program is using the GPU (`nvidia-smi` shows which). TuxWhisper then uses the largest
-downloaded speech model that fits, says so, and goes back to yours once there's room again. If
+downloaded speech model that fits, says so, and goes back to yours once there's room again
+(on AMD and Intel GPUs it can't watch for room: pick your model in the settings menu to retry). If
 not even the smallest fits, it runs the `small` model on the CPU meanwhile (slower, and
 downloaded first if you don't have it). This notice means even that failed: see the log. Free
 some memory, set `ASR_DEVICE=cpu` (see [CPU mode](configuration.md#cpu-mode)), or run Ollama

@@ -9,7 +9,6 @@ ICON_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
 RULE=/etc/udev/rules.d/60-tuxwhisper-uinput.rules
 OLD_RULE=/etc/udev/rules.d/60-uinput.rules  # where installs before 0.2.18 put the line
 RULE_TEXT='KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"'
-CMD="${TUXWHISPER_CMD:-$DIR/asr}"   # set by `tuxwhisper uninstall`
 PY="${TUXWHISPER_PY:-$DIR/.venv/bin/python}"
 
 note() { printf '  %s\n' "$*"; }
@@ -22,8 +21,8 @@ note "Removed the background service."
 
 if command -v gsettings >/dev/null && [ -x "$PY" ] &&
    gsettings list-schemas | grep -x org.gnome.settings-daemon.plugins.media-keys >/dev/null; then
-    "$PY" - "$CMD" <<'EOF'
-import ast, os, shlex, subprocess, sys
+    "$PY" - <<'EOF'
+import ast, os, shlex, subprocess
 
 COMMANDS = {"toggle", "rewrite", "save", "correct", "settings"}
 def ours(command):

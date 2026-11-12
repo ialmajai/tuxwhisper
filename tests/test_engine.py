@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from conftest import LanguageModel, OOMModel, burst, fake_gpu, make_dictation, notified
 
-from tuxwhisper import engine, store
+from tuxwhisper import desktop, engine, store
 
 
 @pytest.mark.parametrize("free, expected, tried", [
@@ -291,3 +291,11 @@ def test_cublas_allocation_failure_counts_as_out_of_memory():
     assert engine.out_of_memory(RuntimeError("cuBLAS failed with status CUBLAS_STATUS_ALLOC_FAILED"))
     assert engine.out_of_memory(RuntimeError("CUDA failed with error out of memory"))
     assert not engine.out_of_memory(RuntimeError("CUDA driver version is insufficient"))
+
+
+def test_fallback_notice_promises_no_return_without_nvidia_smi(monkeypatch):
+    monkeypatch.setattr(engine, "free_gpu_gb", lambda: None)
+    bodies = []
+    monkeypatch.setattr(desktop, "notify", lambda msg, **kw: bodies.append(kw["body"]))
+    engine.fallback_notice("base", "large-v3-turbo")
+    assert "once there's room" not in bodies[0] and "settings menu" in bodies[0]

@@ -47,12 +47,12 @@ class Recordings:
         A press within repeat_window of the last save is the key's auto-repeat."""
         with self.lock:  # each take is saved at most once
             take, self.last_take = self.last_take, None
+        now = time.monotonic()
+        repeat, self.last_save = now - self.last_save < repeat_window, now
         if take is None:
-            if time.monotonic() - self.last_save < repeat_window:
-                return  # auto-repeat of the key that just saved
-            desktop.notify("Nothing to save")
+            if not repeat:  # not the auto-repeat of the key that just saved, or just said this
+                desktop.notify("Nothing to save")
             return
-        self.last_save = time.monotonic()
         # Ask first, off the socket loop: dictation keys keep working while the dialog is open.
         threading.Thread(target=self.confirm_save, args=(take,), daemon=True).start()
 

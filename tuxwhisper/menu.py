@@ -12,7 +12,7 @@ import sys
 import time
 from collections.abc import Callable
 
-from tuxwhisper import daemon, desktop, engine, llm, store
+from tuxwhisper import client, daemon, desktop, engine, llm, store
 
 
 def keys_menu():
@@ -73,9 +73,12 @@ def with_service_env():
 def switch_asr_model(name):
     """Save the speech model and restart the daemon with it (about 15 s); True if it restarted."""
     store.update_settings({"asr_model": name})
-    if subprocess.run(["systemctl", "--user", "is-active", "-q", store.APP]).returncode:
+    try:
+        if subprocess.run(["systemctl", "--user", "is-active", "-q", store.APP]).returncode:
+            return False
+        subprocess.run(["systemctl", "--user", "restart", store.APP])
+    except FileNotFoundError:  # no systemd: the daemon picks the model up when it's next started
         return False
-    subprocess.run(["systemctl", "--user", "restart", store.APP])
     return True
 
 
@@ -366,8 +369,10 @@ def show_history(s):
                     "--column=i", "--column=Time", "--column=Text",
                     "--hide-column=1", "--print-column=1", "--ok-label=Copy", *rows)
     if picked:
-        desktop.clipboard_set(items[int(picked.split("|")[0])]["text"])
-        desktop.notify("Copied", body="Paste it with Ctrl+V.")
+        if desktop.clipboard_set(items[int(picked.split("|")[0])]["text"]):
+            desktop.notify("Copied", body="Paste it with Ctrl+V.")
+        else:
+            desktop.notify("Couldn't copy it", level="error", body="Is xclip or wl-clipboard installed?")
 
 
 def action(fn):
@@ -530,7 +535,7 @@ def correct_last():
     if retype and fresh():  # checked again: the dialog may have stayed open a long time
         with open(store.retype_path(), "w") as f:
             json.dump({"delete": daemon.typed_length(before) + 1, "text": fixed, "at": last.get("at")}, f)
-        replaced = daemon.request("retype") == "ok"
+        replaced = client.request("retype") == "ok"
     if not replaced:  # hand the fix over to paste by hand
         desktop.clipboard_set(fixed)
     store.update_history_entry(last, text=fixed, typed=replaced, at=time.time())

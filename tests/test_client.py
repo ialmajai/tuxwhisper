@@ -36,6 +36,7 @@ def test_key_does_not_restart_a_daemon_still_loading(monkeypatch, state):
 def test_cli_key_commands_import_only_the_socket_client():
     code = ("import sys; from tuxwhisper import asr, client; "
             "print([m for m in ('tuxwhisper.engine', 'tuxwhisper.llm', 'tuxwhisper.menu', "
-            "'tuxwhisper.daemon', 'tuxwhisper.settings', 'dataclasses', 'urllib.request', 'http.client') if m in sys.modules])")
+            "'tuxwhisper.daemon', 'tuxwhisper.settings', 'tuxwhisper.desktop', 'dataclasses', 'subprocess', "
+            "'urllib.request', 'http.client', 'tomllib', 'json', 'csv', 're', 'shutil') if m in sys.modules])")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == "[]"

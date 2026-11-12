@@ -77,7 +77,6 @@ class TakePipeline:
         self.models, self.paster, self.recordings = models, paster, recordings
         self.after_paste = after_paste
         self.last_clip_warning = -CLIP_WARN_EVERY
-        # Cleanups run here, so a slow one can be given up on without stopping it mid-request.
 
     def run(self, take: TakeContext) -> None:
         """Transcribe one take, clean it up if asked, and paste it. take.status holds its

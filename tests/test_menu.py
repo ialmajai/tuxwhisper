@@ -6,7 +6,7 @@ import types
 import pytest
 from conftest import notified, real_add_history
 
-from tuxwhisper import daemon, desktop, menu, store
+from tuxwhisper import client, desktop, menu, store
 
 
 def test_suggest_learning_names_get_rules_and_vocabulary():
@@ -97,7 +97,7 @@ def test_correct_last_replaces_in_place_when_the_daemon_can(monkeypatch, tmp_pat
         with open(store.retype_path()) as f:
             jobs.append(f.read())
         return "ok"
-    monkeypatch.setattr(daemon, "request", fake_request)
+    monkeypatch.setattr(client, "request", fake_request)
     _, copied = fake_dialogs(monkeypatch, "send it to John", [])
     menu.correct_last()
     assert copied == []  # typed in place, so nothing to paste by hand
@@ -116,7 +116,7 @@ def test_correct_last_retypes_only_a_fresh_typed_dictation(monkeypatch, typed, a
     items[-1]["at"] -= age
     store.save_history(items)
     asked = []
-    monkeypatch.setattr(daemon, "request", lambda cmd: asked.append(cmd) or "ok")
+    monkeypatch.setattr(client, "request", lambda cmd: asked.append(cmd) or "ok")
     _, copied = fake_dialogs(monkeypatch, "send it to John", [])
     menu.correct_last()
     assert bool(asked) is expected and bool(copied) is not expected
@@ -129,7 +129,7 @@ def test_correct_last_button_says_what_it_will_do(monkeypatch, typed, age, label
     items = store.load_history()
     items[-1]["at"] -= age
     store.save_history(items)
-    monkeypatch.setattr(daemon, "request", lambda cmd: "ok")
+    monkeypatch.setattr(client, "request", lambda cmd: "ok")
     shown, _ = fake_dialogs(monkeypatch, "send it to jon", [])
     menu.correct_last()
     assert f"--ok-label={label}" in shown[0]
@@ -345,3 +345,19 @@ def test_yad_menu_shows_the_logo_and_parts_the_groups_with_lines(monkeypatch):
     assert cmd[cmd.index("--") + 1:] == [
         "<b>Recent transcripts</b>", '3 <span alpha="55%">(default)</span>', "Your last", menu.SEPARATOR, "", "",
         "<b>Language</b>", "English", "Spoken", menu.SEPARATOR, "", "", "<b>Keys &amp; more</b>", "F5", "The keys"]
+
+
+def test_switching_the_model_without_systemd_just_saves_it(monkeypatch):
+    def no_systemctl(cmd, **k):
+        raise FileNotFoundError("systemctl")
+    monkeypatch.setattr(menu.subprocess, "run", no_systemctl)
+    assert menu.switch_asr_model("small") is False
+    assert store.read_config()["asr_model"] == "small"
+
+
+def test_recent_transcripts_copy_failure_is_reported(monkeypatch):
+    real_add_history("Hello")
+    monkeypatch.setattr(desktop, "zenity", lambda *args: "0|")
+    monkeypatch.setattr(desktop, "clipboard_set", lambda text, *a: False)
+    menu.show_history(store.settings())
+    assert notified[-1] == "Couldn't copy it"

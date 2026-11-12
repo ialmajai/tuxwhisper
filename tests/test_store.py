@@ -157,3 +157,10 @@ def test_only_one_instance_of_a_dialog_runs(monkeypatch):
     assert store.single_instance("correct")
     for f in held:
         f.close()
+
+
+def test_settings_path_that_is_a_directory_is_moved_aside_on_save():
+    os.makedirs(store.CONFIG)
+    store.save_settings({"sounds": False})
+    assert store.read_config()["sounds"] is False
+    assert any(".unreadable-" in n for n in os.listdir(os.path.dirname(store.CONFIG)))

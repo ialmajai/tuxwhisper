@@ -384,8 +384,10 @@ def no_memory_notice(tried: list[str] | None = None) -> None:
 
 
 def fallback_notice(name: str, preferred: str) -> None:
-    desktop.notify(f"GPU memory is short: using {name}", body=f"Back to {preferred} once there's room.",
-                   level="warn")
+    # Without nvidia-smi (whisper.cpp) free memory can't be watched, so there's no going back.
+    back = (f"Back to {preferred} once there's room." if free_gpu_gb() is not None
+            else f"Until TuxWhisper restarts: choose {preferred} in the settings menu to try it again.")
+    desktop.notify(f"GPU memory is short: using {name}", body=back, level="warn")
 
 
 def load_whisper(name: str, device: str | None = None) -> SpeechModel:
