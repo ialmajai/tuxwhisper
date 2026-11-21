@@ -245,7 +245,15 @@ class Paster:
                 self.clipboard.release()
                 return False
             time.sleep(0.05)
-            self.press(keys)
+            try:
+                self.press(keys)
+            except OSError:
+                # The text is on the clipboard already: hand it over like a copy-only paste
+                # rather than report a failed take with the clipboard changed.
+                log.exception("  couldn't press the paste key; the text is copied")
+                self.clipboard.release()
+                desktop.notify("Copied", body="The paste key couldn't be pressed. Paste it with Ctrl+V.", level="warn")
+                return False
         except BaseException:
             self.clipboard.release()
             raise

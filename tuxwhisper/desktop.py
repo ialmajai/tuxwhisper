@@ -2,6 +2,7 @@
 import ast
 import contextlib
 import functools
+import html
 import os
 import re
 import shlex
@@ -11,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 
 from tuxwhisper import store
 
@@ -206,14 +208,15 @@ def bind_gnome() -> None:
 def sound(name: str) -> None:
     """Play a freedesktop theme sound; silently skipped if no player or file is found."""
     path = f"/usr/share/sounds/freedesktop/stereo/{name}.oga"
-    volume = store.settings().sound_volume / 100
+    settings = store.settings()
+    volume = settings.sound_volume / 100
     if shutil.which("pw-play"):
         cmd = ["pw-play", f"--volume={volume}", path]
     elif shutil.which("paplay"):
         cmd = ["paplay", f"--volume={int(volume * 65536)}", path]
     else:
         return
-    if store.settings().sounds and os.path.exists(path):
+    if settings.sounds and os.path.exists(path):
         spawn(cmd)
 
 
@@ -422,7 +425,10 @@ def zenity(*args: str) -> str | None:
     rows = []
     if "--list" in args:  # rows follow the options; "--" keeps a row like "- item" from reading as one
         first_row = next((i for i, a in enumerate(args) if not a.startswith("-")), len(args))
-        args, rows = args[:first_row], ["--", *args[first_row:]]
+        args, rows = args[:first_row], list(args[first_row:])
+        if have_yad():  # yad reads cells as Pango markup: a transcript's < or & must show as typed
+            rows = [html.escape(r, quote=False) for r in rows]
+        rows = ["--", *rows]
     cmd = ["yad", *YAD_APP, "--center", *yad_args(args)] if have_yad() else ["zenity", *args]
     cmd += rows
     try:
@@ -436,7 +442,9 @@ def zenity(*args: str) -> str | None:
         return None
     if r.returncode != 0:
         raise RuntimeError(f"{cmd[0]} failed ({r.returncode}): {r.stderr.strip()}")
-    return out.removesuffix("|") if have_yad() and "--list" in args else out  # yad ends list rows with |
+    if have_yad() and "--list" in args:
+        return html.unescape(out.removesuffix("|"))  # yad prints the cell's markup, ending the row with |
+    return out
 
 
 def fit(headers, rows):
@@ -491,3 +499,22 @@ def pick(title: str, options: list[str], current: str | None) -> str | None:
     return zenity("--list", f"--title={title}", *fit(("Current", "Value"), [("✓", o) for o in options]),
                   "--column=Current", "--column=Value", "--print-column=2",
                   *[x for o in options for x in ("✓" if o == current else "", o)])
+
+
+# Scripts whose letter and its combining accents GTK (Pango) erases with one BackSpace; in
+# others, such as Arabic with vowel marks or Hindi, each BackSpace erases one code point.
+WHOLE_CLUSTER_SCRIPTS = {"LATIN", "GREEK", "CYRILLIC", "HIRAGANA", "KATAKANA", "HANGUL"}
+
+
+def typed_length(text):
+    """How many BackSpaces erase text in a GTK app: one per character, an accented Latin,
+    Greek or Cyrillic letter counting once, but each mark counting in other scripts."""
+    count, script = 0, ""
+    for c in text:
+        if unicodedata.combining(c):
+            if script in WHOLE_CLUSTER_SCRIPTS:
+                continue
+        else:
+            script = unicodedata.name(c, "").split(" ")[0]
+        count += 1
+    return count

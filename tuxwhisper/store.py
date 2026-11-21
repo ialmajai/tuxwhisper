@@ -142,6 +142,8 @@ def apply_replacements(text: str) -> str:
         return text
     for spoken, written in rules:
         spoken, written = spoken.strip(), written.strip().replace("\\n", "\n")
+        if not spoken:  # a half-typed "=> x" would match between every two words
+            continue
         # Whole words, any case. A line-break rule also eats the punctuation and spaces
         # Whisper puts around it ("Hello. New line. World." -> "Hello.\nWorld.").
         # A deletion rule ("um =>") takes the space before the word and a comma after it

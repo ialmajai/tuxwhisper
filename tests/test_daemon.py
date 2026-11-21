@@ -274,17 +274,6 @@ def test_retype_refuses_once_a_newer_dictation_was_pasted(monkeypatch, tmp_path)
     assert not d.retype() and d.paster.kbd.keys == []  # the newer text is left alone
 
 
-@pytest.mark.parametrize("text, presses", [
-    ("caf\u00e9", 4),
-    ("cafe\u0301", 4),          # e + combining accent: one letter in GTK
-    ("\u0442\u0435\u0441\u0442", 4),  # Cyrillic
-    ("\u0928\u092e\u0938\u094d\u0924\u0947", 6),  # Hindi: the virama and vowel sign each a BackSpace
-    ("\u0645\u064e\u0631\u0652\u062d\u064e\u0628\u064b\u0627", 9),  # Arabic vowel marks too
-])
-def test_typed_length_counts_backspaces_as_gtk_erases(text, presses):
-    assert daemon.typed_length(text) == presses
-
-
 def test_failed_take_is_reported_and_the_next_one_works(monkeypatch):
     d = make_dictation(monkeypatch)
     calls = []
@@ -1037,3 +1026,39 @@ def test_save_key_uses_the_desktop_s_repeat_delay(monkeypatch):
     d.recordings.save = lambda window: windows.append(window)
     d.save()
     assert windows == [1.0]
+
+
+def test_paste_key_that_can_t_be_pressed_leaves_the_text_copied(monkeypatch):
+    """The text is on the clipboard by then: say so, rather than call the take failed."""
+    board = {"clipboard": ("text", b"old"), "primary": None}
+    d, writes, restores = real_paster(monkeypatch, board)
+    def broken(kind, code, val):
+        raise OSError(5, "Input/output error")
+    d.paster.kbd.write = broken
+    assert d.paster.paste("hi ") is False
+    assert notified[-1] == "Copied" and ("clipboard", "hi ") in writes and restores == []
+    assert d.paster.clipboard.acquire(blocking=False)  # released for the next paste
+
+
+def test_connection_that_sends_nothing_is_not_a_failed_command(monkeypatch):
+    import socket
+    monkeypatch.setattr(server, "COMMAND_TIMEOUT", 0.05)
+    d = types.SimpleNamespace(press=lambda rewrite=False: pytest.fail("no command was sent"))
+    a, b = socket.socketpair()
+    server.handle(d, a)
+    assert notified == []
+    b.close()
+
+
+def test_release_watcher_survives_a_failed_check(monkeypatch):
+    d = make_dictation(monkeypatch)
+    ticks = iter([None, None])
+    monkeypatch.setattr(daemon.time, "sleep", lambda s: next(ticks))
+    checks = []
+    def check():
+        checks.append(True)
+        raise RuntimeError("can't start new thread")
+    d.check_release = check
+    with pytest.raises(StopIteration):
+        d._watch_release()
+    assert checks == [True, True]  # the failure didn't end the loop

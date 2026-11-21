@@ -61,12 +61,18 @@ def serve() -> None:
         threading.Thread(target=handle, args=(d, conn), daemon=True).start()
 
 
+COMMAND_TIMEOUT = 2  # seconds for a client to send its word
+
+
 def handle(d: Dictation, conn: socket.socket) -> None:
     """Run one connection's command."""
     try:
         with conn:
-            conn.settimeout(2)
-            cmd = conn.recv(64).decode(errors="replace").strip()
+            conn.settimeout(COMMAND_TIMEOUT)
+            try:
+                cmd = conn.recv(64).decode(errors="replace").strip()
+            except TimeoutError:
+                return  # connected and sent nothing (a probe, not a key): nothing to report
             if cmd == "retype":  # the caller waits, so its next dialog can't steal the focus
                 conn.settimeout(None)
                 conn.sendall(b"ok" if d.retype() else b"no")

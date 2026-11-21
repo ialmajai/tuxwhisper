@@ -40,3 +40,21 @@ def test_cli_key_commands_import_only_the_socket_client():
             "'urllib.request', 'http.client', 'tomllib', 'json', 'csv', 're', 'shutil') if m in sys.modules])")
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True).stdout
     assert out.strip() == "[]"
+
+
+def test_command_delivered_but_unanswered_in_time_is_not_a_daemon_that_is_down(tmp_path):
+    """The daemon took the word (e.g. a long retype): the key must not report it as not running
+    or start it again, as the Rust client doesn't."""
+    import socket
+    import threading
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(client.sock_path())
+    srv.listen()
+    held = []
+    threading.Thread(target=lambda: held.append(srv.accept()[0]), daemon=True).start()  # never answers
+    try:
+        assert client.request("retype", timeout=0.1) == ""
+    finally:
+        srv.close()
+        for c in held:
+            c.close()

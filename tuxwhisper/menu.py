@@ -12,7 +12,7 @@ import sys
 import time
 from collections.abc import Callable
 
-from tuxwhisper import client, daemon, desktop, engine, llm, store
+from tuxwhisper import client, desktop, engine, llm, store
 
 
 def keys_menu():
@@ -436,8 +436,8 @@ SETTINGS = [
 
 
 def settings_menu():
-    if not shutil.which("zenity"):
-        sys.exit("The settings menu needs zenity (e.g. sudo apt install zenity).")
+    if not (desktop.have_yad() or shutil.which("zenity")):
+        sys.exit("The settings menu needs yad or zenity (e.g. sudo apt install yad).")
     fields = {f.name for f in dataclasses.fields(store.Settings)}
     while True:
         s, cfg, mode = store.settings(), store.read_config(), llm.current_mode()
@@ -534,12 +534,12 @@ def correct_last():
     replaced = False
     if retype and fresh():  # checked again: the dialog may have stayed open a long time
         with open(store.retype_path(), "w") as f:
-            json.dump({"delete": daemon.typed_length(before) + 1, "text": fixed, "at": last.get("at")}, f)
+            json.dump({"delete": desktop.typed_length(before) + 1, "text": fixed, "at": last.get("at")}, f)
         replaced = client.request("retype") == "ok"
-    if not replaced:  # hand the fix over to paste by hand
-        desktop.clipboard_set(fixed)
+    copied = replaced or desktop.clipboard_set(fixed)  # else hand the fix over to paste by hand
     store.update_history_entry(last, text=fixed, typed=replaced, at=time.time())
-    done = "Replaced the dictated text." if replaced else "The corrected text is copied. Paste it with Ctrl+V."
+    done = ("Replaced the dictated text." if replaced else "The corrected text is copied. Paste it with Ctrl+V."
+            if copied else "Couldn't copy the corrected text (is xclip or wl-clipboard installed?).")
 
     choices = [(f'Always write "{spoken}" as "{written}"' if kind == "rule"
                 else f'Add "{written}" to the vocabulary', kind, spoken, written, ticked)
@@ -570,5 +570,9 @@ def correct_last():
             store.fix_recording_text(spoken, written)
         learned.append(kind)
     remembered = f"Remembered {desktop.plural(len(learned), 'change', 'changes')}." if learned else ""
+    if not copied:
+        desktop.notify("Couldn't copy the corrected text", level="error",
+                       body=f"Is xclip or wl-clipboard installed? {remembered}".strip())
+        return
     desktop.notify("Replaced the dictated text" if replaced else "Corrected text copied",
                    body=(remembered if replaced else f"Paste it with Ctrl+V. {remembered}").strip() or None)

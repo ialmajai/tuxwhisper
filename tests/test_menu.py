@@ -361,3 +361,12 @@ def test_recent_transcripts_copy_failure_is_reported(monkeypatch):
     monkeypatch.setattr(desktop, "clipboard_set", lambda text, *a: False)
     menu.show_history(store.settings())
     assert notified[-1] == "Couldn't copy it"
+
+
+def test_correct_last_says_so_when_the_fix_could_not_be_copied(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    real_add_history("I use tux whisper daily.")
+    fake_dialogs(monkeypatch, "I use TuxWhisper daily.", [])
+    monkeypatch.setattr(desktop, "clipboard_set", lambda text, *a: False)
+    menu.correct_last()
+    assert notified[-1] == "Couldn't copy the corrected text"

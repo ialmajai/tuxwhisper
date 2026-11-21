@@ -273,3 +273,24 @@ def test_yad_dialogs_get_the_logo_and_the_styles():
     assert os.path.exists(icon) and os.path.exists(css)
     with open(css) as f:
         assert "hover" in f.read()
+
+
+@pytest.mark.parametrize("text, presses", [
+    ("caf\u00e9", 4),
+    ("cafe\u0301", 4),          # e + combining accent: one letter in GTK
+    ("\u0442\u0435\u0441\u0442", 4),  # Cyrillic
+    ("\u0928\u092e\u0938\u094d\u0924\u0947", 6),  # Hindi: the virama and vowel sign each a BackSpace
+    ("\u0645\u064e\u0631\u0652\u062d\u064e\u0628\u064b\u0627", 9),  # Arabic vowel marks too
+])
+def test_typed_length_counts_backspaces_as_gtk_erases(text, presses):
+    assert desktop.typed_length(text) == presses
+
+
+def test_yad_list_shows_user_text_as_typed_and_returns_it_unescaped(monkeypatch):
+    """yad reads list cells as Pango markup, and prints the cell's markup back."""
+    monkeypatch.setattr(desktop, "have_yad", lambda: True)
+    cmds = []
+    monkeypatch.setattr(desktop.subprocess, "run", lambda cmd, **k: cmds.append(cmd) or types.SimpleNamespace(
+        returncode=0, stdout="a &lt; b &amp; c|\n", stderr=""))
+    assert desktop.zenity("--list", "--column=Text", "a < b & c", "<i>plain</i>") == "a < b & c"
+    assert cmds[0][cmds[0].index("--") + 1:] == ["a &lt; b &amp; c", "&lt;i&gt;plain&lt;/i&gt;"]

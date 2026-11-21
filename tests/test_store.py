@@ -164,3 +164,8 @@ def test_settings_path_that_is_a_directory_is_moved_aside_on_save():
     store.save_settings({"sounds": False})
     assert store.read_config()["sounds"] is False
     assert any(".unreadable-" in n for n in os.listdir(os.path.dirname(store.CONFIG)))
+
+
+def test_rule_with_nothing_on_the_spoken_side_is_ignored(tmp_path):
+    (tmp_path / "replacements.txt").write_text("=> foo\n => \num =>\n")  # half-typed lines
+    assert store.apply_replacements("Hello, um, world.") == "Hello, world."

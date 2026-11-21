@@ -158,6 +158,7 @@ def test_model_known_not_to_fit_is_not_read_from_disk(monkeypatch):
     take): when nvidia-smi says it can't fit, fail at once, as the same out-of-memory."""
     built = []
     monkeypatch.setattr(engine, "DEVICE", "cuda")
+    monkeypatch.setattr(engine, "model_downloaded", lambda name: True)
     monkeypatch.setattr(engine, "FasterWhisperModel", lambda name, device=None: built.append(name))
     monkeypatch.setattr(engine, "free_gpu_gb", lambda: 0.5)
     with pytest.raises(RuntimeError) as e:
@@ -181,6 +182,7 @@ def test_failed_warm_up_frees_the_model(monkeypatch):
             freed.append(True)
 
     monkeypatch.setattr(engine, "DEVICE", "vulkan")
+    monkeypatch.setattr(engine, "model_downloaded", lambda name: True)
     monkeypatch.setattr(engine, "WhisperCpp", lambda name: Broken())
     with pytest.raises(RuntimeError):
         engine.load_whisper("tiny")
@@ -299,3 +301,50 @@ def test_fallback_notice_promises_no_return_without_nvidia_smi(monkeypatch):
     monkeypatch.setattr(desktop, "notify", lambda msg, **kw: bodies.append(kw["body"]))
     engine.fallback_notice("base", "large-v3-turbo")
     assert "once there's room" not in bodies[0] and "settings menu" in bodies[0]
+
+
+def test_warm_up_runs_the_decoder_too(monkeypatch):
+    """faster-whisper transcribes lazily: the memory its decoder needs is only taken when the
+    segments are read, so an out-of-memory there must show at load time too."""
+    freed = []
+
+    class Lazy:
+        def transcribe(self, audio, **_):
+            def segments():
+                raise RuntimeError("CUDA failed with error out of memory")
+                yield
+            return segments(), None
+
+        def unload(self, to_cpu=True):
+            freed.append(True)
+
+    monkeypatch.setattr(engine, "DEVICE", "vulkan")
+    monkeypatch.setattr(engine, "model_downloaded", lambda name: True)
+    monkeypatch.setattr(engine, "WhisperCpp", lambda name: Lazy())
+    with pytest.raises(RuntimeError, match="out of memory"):
+        engine.load_whisper("tiny")
+    assert freed == [True]
+
+
+def test_model_fetched_during_a_load_is_announced(monkeypatch):
+    """A model the ladder couldn't try at startup is downloaded by the first take that has
+    room for it: that can take minutes, so the user is told, as at startup."""
+    monkeypatch.setattr(engine, "DEVICE", "vulkan")
+    monkeypatch.setattr(engine, "model_downloaded", lambda name: False)
+    monkeypatch.setattr(engine, "WhisperCpp", lambda name: types.SimpleNamespace(transcribe=lambda *a, **k: ([], None)))
+    engine.load_whisper("tiny")
+    assert notified[-2:] == ["Downloading the speech model tiny…", "Speech model tiny is ready"]
+
+
+def test_default_model_under_its_menu_name_is_tried_once(monkeypatch):
+    """large-v3-turbo in the menu is the GPU default's repo: a failure is one failure."""
+    monkeypatch.setattr(engine, "DEVICE", "cuda")
+    store.save_settings({"asr_model": "large-v3-turbo"})
+    attempts = []
+    def broken(name):
+        attempts.append(name)
+        raise RuntimeError("cuBLAS is broken")
+    monkeypatch.setattr(engine, "load_whisper", broken)
+    with pytest.raises(engine.ModelUnavailable):
+        engine.load_model()
+    assert attempts == ["large-v3-turbo"] and "Couldn't load the speech model large-v3-turbo" not in notified

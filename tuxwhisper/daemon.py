@@ -6,7 +6,6 @@ import os
 import threading
 import time
 import traceback
-import unicodedata
 from concurrent.futures import Future, ThreadPoolExecutor
 
 from tuxwhisper import desktop, engine, llm, store
@@ -109,7 +108,10 @@ class Dictation:
     def _watch_release(self):
         while True:
             time.sleep(0.05)
-            self.check_release()
+            try:
+                self.check_release()
+            except Exception:  # a failed check costs one tick, not the watcher (held keys would never stop)
+                log.exception("release check failed")
 
     def check_release(self):
         """Stop a held take once its key stops repeating. The repeat burst ends with it: a press
@@ -278,15 +280,15 @@ class Dictation:
             if token is not None:
                 self._announce(token, rewrite)
             return
-        if take.muted:  # other apps' sound back on, off the take's path
-            threading.Thread(target=desktop.mute_streams, args=(take.muted, False), daemon=True).start()
-        # Swap "Recording…" for "Transcribing…" in place: one notification, not a new popup.
-        # Shown in the background: notify-send -p takes a while, and the take needn't wait.
         status = take.status = Status()
-        status.thread = threading.Thread(target=lambda: status.append(desktop.notify(
-            "Transcribing…", persistent=True, icon=MIC_ICON, replace=take.indicator)), daemon=True)
-        status.thread.start()
-        try:
+        try:  # from here on, the take's ticket must be served whatever fails
+            if take.muted:  # other apps' sound back on, off the take's path
+                threading.Thread(target=desktop.mute_streams, args=(take.muted, False), daemon=True).start()
+            # Swap "Recording…" for "Transcribing…" in place: one notification, not a new popup.
+            # Shown in the background: notify-send -p takes a while, and the take needn't wait.
+            status.thread = threading.Thread(target=lambda: status.append(desktop.notify(
+                "Transcribing…", persistent=True, icon=MIC_ICON, replace=take.indicator)), daemon=True)
+            status.thread.start()
             with self.turn:
                 self.turn.wait_for(lambda: self.serving == take.ticket)
             self.pipeline.run(take)
@@ -344,22 +346,3 @@ class Dictation:
             with self.turn:
                 self.serving += 1
                 self.turn.notify_all()
-
-
-# Scripts whose letter and its combining accents GTK (Pango) erases with one BackSpace; in
-# others, such as Arabic with vowel marks or Hindi, each BackSpace erases one code point.
-WHOLE_CLUSTER_SCRIPTS = {"LATIN", "GREEK", "CYRILLIC", "HIRAGANA", "KATAKANA", "HANGUL"}
-
-
-def typed_length(text):
-    """How many BackSpaces erase text in a GTK app: one per character, an accented Latin,
-    Greek or Cyrillic letter counting once, but each mark counting in other scripts."""
-    count, script = 0, ""
-    for c in text:
-        if unicodedata.combining(c):
-            if script in WHOLE_CLUSTER_SCRIPTS:
-                continue
-        else:
-            script = unicodedata.name(c, "").split(" ")[0]
-        count += 1
-    return count

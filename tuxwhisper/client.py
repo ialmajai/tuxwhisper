@@ -28,7 +28,10 @@ def request(cmd: str, timeout: float = 60) -> str | None:
             s.connect(sock_path())
             s.sendall(cmd.encode())
             s.shutdown(socket.SHUT_WR)
-            return s.recv(16).decode()
+            try:
+                return s.recv(16).decode()
+            except TimeoutError:
+                return ""  # delivered, but the daemon is busy: not "isn't running" (the Rust client agrees)
     except OSError:
         return None
 

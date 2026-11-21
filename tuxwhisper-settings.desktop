@@ -2,7 +2,7 @@
 Type=Application
 Name=TuxWhisper Settings
 Comment=Change dictation settings, vocabulary and replacements
-Exec=@CMD@ settings
+Exec="@CMD@" settings
 Icon=tuxwhisper
 Terminal=false
 Categories=Utility;

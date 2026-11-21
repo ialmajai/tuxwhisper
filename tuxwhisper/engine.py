@@ -400,9 +400,19 @@ def load_whisper(name: str, device: str | None = None) -> SpeechModel:
         # Known not to fit: don't read the whole model from disk (3-17 s) to be told so.
         raise RuntimeError(f"CUDA out of memory: {name} needs about {short} GB more than is free")
     log.info(f"loading {name} on {device} ...")
-    model = WhisperCpp(name) if device == "vulkan" else FasterWhisperModel(name, device)
+    fetching = not model_downloaded(name)
+    downloading = download_notice(name) if fetching else None
     try:
-        model.transcribe(np.zeros(16000, dtype=np.float32), vad_filter=False)  # warm-up
+        model = WhisperCpp(name) if device == "vulkan" else FasterWhisperModel(name, device)
+    except Exception:
+        desktop.close_notification(downloading)
+        raise
+    if fetching:
+        desktop.close_notification(downloading)
+        desktop.notify(f"Speech model {name} is ready")
+    try:
+        segments, _ = model.transcribe(np.zeros(16000, dtype=np.float32), vad_filter=False)  # warm-up
+        list(segments)  # faster-whisper decodes lazily: the decoder's memory is only taken here
     except Exception:
         # Free its GPU memory before a caller tries a smaller one. `del` isn't enough: the
         # traceback being raised keeps the model alive.
@@ -410,6 +420,15 @@ def load_whisper(name: str, device: str | None = None) -> SpeechModel:
             model.unload(to_cpu=False)
         raise
     return model
+
+
+def download_notice(name: str) -> str | None:
+    """The persistent "Downloading…" notification for a model not on disk yet: the download
+    runs inside the load, which can be a take's."""
+    size = next((m[2] for m in ASR_MODELS if m[0] == short_name(name)), None)
+    about = f"About {size}. " if size else ""
+    return desktop.notify(f"Downloading the speech model {name}…", persistent=True,
+                          body=f"<i>{about}Dictation starts when it's ready.</i>")
 
 
 class ModelUnavailable(Exception):
@@ -424,24 +443,20 @@ def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
     that doesn't fit in GPU memory to a smaller one, or the CPU. Returns (model, its name, the model it
     replaced); the model and its name are None when none fits in GPU memory yet."""
     name, default = asr_model(), default_asr_model()
-    for attempt in dict.fromkeys([name, default]):
-        downloading, short_of_memory = None, False
+    # The menu's name for the default is the same model: don't try (and report) it twice.
+    attempts = [name] if short_name(name) == short_name(default) else [name, default]
+    for attempt in attempts:
+        short_of_memory = False
         try:
-            if not model_downloaded(attempt):
-                size = next((m[2] for m in ASR_MODELS if m[0] == short_name(attempt)), None)
-                about = f"About {size}. " if size else ""
-                downloading = desktop.notify(f"Downloading the speech model {attempt}…", persistent=True,
-                                     body=f"<i>{about}Dictation starts when it's ready.</i>")
             model = load_whisper(attempt)
         except ImportError as e:
             raise ModelUnavailable(f"{e.name or 'a speech library'} is missing ({e}); run `tuxwhisper setup` "
                                    "(or ./install.sh in a git clone) again") from e
         except Exception as e:
-            desktop.close_notification(downloading)
             if DEVICE != "cpu" and out_of_memory(e):
                 log.info(f"no GPU memory for {attempt} ({e})")
                 short_of_memory = True
-            elif attempt != default:
+            elif attempt != attempts[-1]:
                 log.info(f"couldn't load {attempt} ({e}); using {default}")
                 desktop.notify(f"Couldn't load the speech model {attempt}", level="warn",
                                body=f"Using {default} instead. See the log: journalctl --user -u tuxwhisper")
@@ -465,9 +480,6 @@ def load_model() -> tuple[SpeechModel | None, str | None, str | None]:
             log.info("no GPU memory for any speech model; retrying on the next take")
             no_memory_notice(tried)
             return None, None, tried[0]
-        if downloading:
-            desktop.close_notification(downloading)
-            desktop.notify(f"Speech model {attempt} is ready")
         return model, short_name(attempt), None
 
 
